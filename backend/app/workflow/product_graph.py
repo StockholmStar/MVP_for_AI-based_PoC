@@ -46,10 +46,39 @@ FEATURE_MAP = {
 }
 
 
+AGENT_INSTRUCTION_MARKERS = (
+    "agent",
+    "generate",
+    "create",
+    "build",
+    "workflow",
+    "prd",
+    "prototype",
+    "jira",
+    "story",
+    "stories",
+    "生成",
+    "原型",
+    "运行",
+)
+
+
+def product_summary_from_input(user_input: str) -> str:
+    candidate = user_input.strip()
+    if not candidate:
+        return DEMO_IDEA
+
+    lower_candidate = candidate.lower()
+    if any(marker in lower_candidate for marker in AGENT_INSTRUCTION_MARKERS):
+        return DEMO_IDEA
+
+    return candidate
+
+
 def clarify_requirements(state: ProductState) -> ProductState:
     user_input = state.get("user_input") or DEMO_IDEA
     return {
-        "product_idea": user_input,
+        "product_idea": product_summary_from_input(user_input),
         "context_pack": load_context_pack(),
         "assumptions": [
             "Feature ships as an opt-in system experience for Android 15+ devices.",

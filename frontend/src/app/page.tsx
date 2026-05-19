@@ -86,7 +86,7 @@ export default function Home() {
   useEffect(() => {
     if (!detail) return;
     setSelectedVersion((previous) => {
-      if (previous && versions.includes(previous) && previous === detail.project.current_version) return previous;
+      if (previous && versions.includes(previous)) return previous;
       return detail.project.current_version || versions[0] || "";
     });
   }, [detail, versions]);
