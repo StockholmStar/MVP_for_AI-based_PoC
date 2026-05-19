@@ -1,4 +1,35 @@
-export const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, "") || "";
+const CONFIGURED_API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, "") || "";
+
+function isLoopbackHost(hostname: string) {
+  return ["localhost", "127.0.0.1", "0.0.0.0", "::1"].includes(hostname);
+}
+
+function apiBaseUrl() {
+  if (!CONFIGURED_API_BASE_URL || typeof window === "undefined") {
+    return CONFIGURED_API_BASE_URL;
+  }
+
+  const pageUrl = window.location;
+  const pageIsLoopback = isLoopbackHost(pageUrl.hostname);
+
+  try {
+    const configuredUrl = new URL(CONFIGURED_API_BASE_URL);
+    const apiIsLoopback = isLoopbackHost(configuredUrl.hostname);
+    const wouldUseMixedContent = pageUrl.protocol === "https:" && configuredUrl.protocol === "http:";
+
+    if ((apiIsLoopback && !pageIsLoopback) || wouldUseMixedContent) {
+      return "";
+    }
+  } catch {
+    return "";
+  }
+
+  return CONFIGURED_API_BASE_URL;
+}
+
+export function apiDisplayBaseUrl() {
+  return apiBaseUrl() || "same-origin /api proxy";
+}
 
 export type Project = {
   id: string;
@@ -29,7 +60,7 @@ export type ProjectDetail = {
 };
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${path}`, {
+  const response = await fetch(`${apiBaseUrl()}${path}`, {
     ...init,
     headers: {
       "Content-Type": "application/json",
@@ -52,5 +83,5 @@ export const api = {
   runWorkflow: (id: string, user_input: string) =>
     request(`/api/projects/${id}/runs`, { method: "POST", body: JSON.stringify({ user_input }) }),
   prototypeUrl: (id: string, version: string, focus?: string) =>
-    `${API_BASE_URL}/api/projects/${id}/prototype/${version}${focus ? `?focus=${encodeURIComponent(focus)}` : ""}`
+    `${apiBaseUrl()}/api/projects/${id}/prototype/${version}${focus ? `?focus=${encodeURIComponent(focus)}` : ""}`
 };

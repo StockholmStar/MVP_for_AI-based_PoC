@@ -45,14 +45,14 @@ Frontend:
 ```bash
 cd frontend
 npm install
-NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000 npm run dev
+API_PROXY_TARGET=http://127.0.0.1:8000 npm run dev
 ```
 
 Open `http://127.0.0.1:3000`.
 
-## Linux Server Startup
+## Linux Server / Tunnel Startup
 
-On a Linux server, bind both services to `0.0.0.0` and set the frontend API URL to the server address:
+On a Linux server, bind both services to `0.0.0.0` and let Next.js proxy same-origin `/api` requests to the backend. This works for direct server access and HTTPS tunnels such as Cloudflare Tunnel because the browser only calls the frontend origin.
 
 ```bash
 # Terminal 1
@@ -67,7 +67,7 @@ PYTHONPATH=. API_HOST=0.0.0.0 API_PORT=8000 uvicorn app.main:app --host 0.0.0.0 
 # Terminal 2
 cd /path/to/MVP_for_AI-based_PoC/frontend
 npm install
-NEXT_PUBLIC_API_BASE_URL=http://<server-ip>:8000 npm run dev
+API_PROXY_TARGET=http://127.0.0.1:8000 npm run dev
 ```
 
 From another computer on the same LAN or through a reachable public IP, open:
@@ -76,22 +76,23 @@ From another computer on the same LAN or through a reachable public IP, open:
 http://<server-ip>:3000
 ```
 
-Make sure firewall/security-group rules allow inbound TCP `3000` and `8000`.
+Make sure firewall/security-group rules allow inbound TCP `3000`. Port `8000` can stay private when the frontend proxy can reach it locally.
+
+For Cloudflare Tunnel, point the tunnel at the frontend service, for example `http://127.0.0.1:3000`. Keep the backend running on the server and set `API_PROXY_TARGET=http://127.0.0.1:8000` for the frontend process.
 
 For a production-like Next.js start:
 
 ```bash
 cd frontend
-NEXT_PUBLIC_API_BASE_URL=http://<server-ip>:8000 npm run build
+API_PROXY_TARGET=http://127.0.0.1:8000 npm run build
 PORT=3000 npm run start
 ```
 
 ## Docker Compose
 
-Set the public API URL, then start both services:
+Start both services. The frontend container proxies same-origin `/api` requests to the backend container:
 
 ```bash
-export NEXT_PUBLIC_API_BASE_URL=http://<server-ip>:8000
 docker compose up --build
 ```
 

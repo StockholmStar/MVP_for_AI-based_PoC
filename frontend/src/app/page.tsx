@@ -2,7 +2,7 @@
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { Bot, Boxes, CheckCircle2, FileText, GitBranch, Loader2, Play, Plus, TestTube2, TicketCheck } from "lucide-react";
-import { API_BASE_URL, Artefact, Project, ProjectDetail, api } from "@/lib/api";
+import { Artefact, Project, ProjectDetail, api, apiDisplayBaseUrl } from "@/lib/api";
 
 const artefactTabs = [
   { key: "prd", label: "PRD", icon: FileText },
@@ -38,6 +38,7 @@ export default function Home() {
   const [log, setLog] = useState<string[]>(["Ready. Open the demo project or run the workflow."]);
   const [focus, setFocus] = useState("notification_summary_card");
   const [newName, setNewName] = useState("Smart Notification Summary");
+  const apiLabel = apiDisplayBaseUrl();
 
   async function refresh(projectId?: string) {
     const list = await api.listProjects();
@@ -67,14 +68,19 @@ export default function Home() {
 
   async function runAgent(event: FormEvent) {
     event.preventDefault();
-    if (!detail || !input.trim()) return;
+    if (!input.trim()) return;
     setBusy(true);
-    setLog((items) => [`Running LangGraph workflow for ${detail.project.name}...`, ...items]);
     try {
-      const result = await api.runWorkflow(detail.project.id, input.trim());
+      const activeProject = detail?.project || (await api.demoProject());
+      if (!detail) {
+        await refresh(activeProject.id);
+      }
+
+      setLog((items) => [`Running LangGraph workflow for ${activeProject.name}...`, ...items]);
+      const result = await api.runWorkflow(activeProject.id, input.trim());
       const version = (result as { run: { version: string; message: string } }).run.version;
       setLog((items) => [`Completed ${version}: ${(result as { run: { message: string } }).run.message}`, ...items]);
-      await refresh(detail.project.id);
+      await refresh(activeProject.id);
       setSelectedTab("prd");
     } catch (error) {
       setLog((items) => [`Run failed: ${(error as Error).message}`, ...items]);
@@ -150,7 +156,7 @@ export default function Home() {
         <header className="flex h-16 items-center justify-between border-b border-slate-200 bg-white px-5">
           <div>
             <div className="font-semibold">{detail?.project.name || "Loading project"}</div>
-            <div className="text-xs text-slate-500">API: {API_BASE_URL} · Human approval gates: PRD review, prototype review, Jira push pending</div>
+            <div className="text-xs text-slate-500">API: {apiLabel} · Human approval gates: PRD review, prototype review, Jira push pending</div>
           </div>
           <div className="flex items-center gap-2">
             <select value={focus} onChange={(event) => setFocus(event.target.value)} className="rounded border border-slate-300 px-2 py-2 text-sm">
@@ -197,7 +203,7 @@ export default function Home() {
               <label className="mb-1 flex items-center gap-2 text-sm font-semibold"><Bot size={16} /> Agent instruction</label>
               <textarea value={input} onChange={(event) => setInput(event.target.value)} className="h-20 w-full resize-none rounded border border-slate-300 px-3 py-2 text-sm" />
             </div>
-            <button disabled={busy || !detail} className="flex h-11 items-center gap-2 rounded bg-teal-700 px-4 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-60">
+            <button type="submit" disabled={busy || !input.trim()} className="flex h-11 items-center gap-2 rounded bg-teal-700 px-4 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-60">
               {busy ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} />} Run workflow
             </button>
           </div>

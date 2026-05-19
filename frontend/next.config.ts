@@ -4,6 +4,7 @@ const API_PROXY_TARGET = process.env.API_PROXY_TARGET || "http://127.0.0.1:8000"
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
+  allowedDevOrigins: ["*.trycloudflare.com"],
   async rewrites() {
     return [
       {
