@@ -74,6 +74,14 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+async function requestText(path: string): Promise<string> {
+  const response = await fetch(`${apiBaseUrl()}${path}`, { cache: "no-store" });
+  if (!response.ok) {
+    throw new Error(await response.text());
+  }
+  return response.text();
+}
+
 export const api = {
   listProjects: () => request<Project[]>("/api/projects"),
   demoProject: () => request<Project>("/api/projects/demo"),
@@ -82,6 +90,7 @@ export const api = {
     request<Project>("/api/projects", { method: "POST", body: JSON.stringify(payload) }),
   runWorkflow: (id: string, user_input: string) =>
     request(`/api/projects/${id}/runs`, { method: "POST", body: JSON.stringify({ user_input }) }),
+  getArtefactContent: (projectId: string, artefactId: string) => requestText(`/api/projects/${projectId}/artefacts/${artefactId}`),
   prototypeUrl: (id: string, version: string, focus?: string) =>
     `${apiBaseUrl()}/api/projects/${id}/prototype/${version}${focus ? `?focus=${encodeURIComponent(focus)}` : ""}`
 };

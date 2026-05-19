@@ -14,6 +14,25 @@ const artefactTabs = [
 
 const demoPrompt = "为智能通知摘要功能生成 PRD 和原型，覆盖 Notification shade、Settings opt-in、empty/error/success 状态，并生成 QA 和 Jira stories。";
 
+function parseVersion(version: string) {
+  return version
+    .replace(/^v/i, "")
+    .split(".")
+    .map((part) => Number.parseInt(part, 10))
+    .map((part) => (Number.isFinite(part) ? part : 0));
+}
+
+function compareVersions(a: string, b: string) {
+  const left = parseVersion(a);
+  const right = parseVersion(b);
+  const length = Math.max(left.length, right.length);
+  for (let index = 0; index < length; index += 1) {
+    const difference = (left[index] || 0) - (right[index] || 0);
+    if (difference !== 0) return difference;
+  }
+  return a.localeCompare(b);
+}
+
 function renderMarkdownLite(markdown: string) {
   const html = markdown
     .replace(/&/g, "&amp;")
@@ -38,6 +57,8 @@ export default function Home() {
   const [log, setLog] = useState<string[]>(["Ready. Open the demo project or run the workflow."]);
   const [focus, setFocus] = useState("notification_summary_card");
   const [newName, setNewName] = useState("Smart Notification Summary");
+  const [selectedVersion, setSelectedVersion] = useState("");
+  const [artefactContentById, setArtefactContentById] = useState<Record<string, string>>({});
   const apiLabel = apiDisplayBaseUrl();
 
   async function refresh(projectId?: string) {
@@ -57,14 +78,49 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const activeArtefact: Artefact | undefined = useMemo(() => {
-    if (!detail) return undefined;
-    return detail.latest[selectedTab];
-  }, [detail, selectedTab]);
+  const versions = useMemo(
+    () => Array.from(new Set((detail?.artefacts || []).map((item) => item.version))).sort(compareVersions).reverse(),
+    [detail]
+  );
 
-  const currentVersion = detail?.project.current_version || "v1.0";
-  const prototypeSrc = detail ? api.prototypeUrl(detail.project.id, currentVersion, focus) : "";
-  const versions = Array.from(new Set((detail?.artefacts || []).map((item) => item.version))).sort().reverse();
+  useEffect(() => {
+    if (!detail) return;
+    setSelectedVersion((previous) => {
+      if (previous && versions.includes(previous) && previous === detail.project.current_version) return previous;
+      return detail.project.current_version || versions[0] || "";
+    });
+  }, [detail, versions]);
+
+  const selectedVersionArtefacts = useMemo(() => {
+    if (!detail || !selectedVersion) return [];
+    return detail.artefacts.filter((item) => item.version === selectedVersion);
+  }, [detail, selectedVersion]);
+
+  const activeArtefact: Artefact | undefined = useMemo(
+    () => selectedVersionArtefacts.find((item) => item.kind === selectedTab),
+    [selectedVersionArtefacts, selectedTab]
+  );
+
+  const activePrototype = selectedVersionArtefacts.find((item) => item.kind === "prototype");
+  const activeArtefactContent = activeArtefact ? artefactContentById[activeArtefact.id] : undefined;
+  const activeArtefactLoaded = activeArtefact ? activeArtefact.id in artefactContentById : false;
+  const prototypeSrc = detail && selectedVersion ? api.prototypeUrl(detail.project.id, selectedVersion, focus) : "";
+
+  useEffect(() => {
+    if (!detail || !activeArtefact || activeArtefactLoaded) return;
+    let ignore = false;
+    api
+      .getArtefactContent(detail.project.id, activeArtefact.id)
+      .then((content) => {
+        if (!ignore) {
+          setArtefactContentById((items) => ({ ...items, [activeArtefact.id]: content }));
+        }
+      })
+      .catch((error) => setLog((items) => [`Artefact load failed: ${error.message}`, ...items]));
+    return () => {
+      ignore = true;
+    };
+  }, [activeArtefact, activeArtefactLoaded, detail]);
 
   async function runAgent(event: FormEvent) {
     event.preventDefault();
@@ -80,6 +136,7 @@ export default function Home() {
       const result = await api.runWorkflow(activeProject.id, input.trim());
       const version = (result as { run: { version: string; message: string } }).run.version;
       setLog((items) => [`Completed ${version}: ${(result as { run: { message: string } }).run.message}`, ...items]);
+      setSelectedVersion(version);
       await refresh(activeProject.id);
       setSelectedTab("prd");
     } catch (error) {
@@ -96,6 +153,7 @@ export default function Home() {
       description: "Created from AI Product Workspace",
       product_idea: input
     });
+    setSelectedVersion(project.current_version);
     await refresh(project.id);
     setLog((items) => [`Created project ${project.name}`, ...items]);
   }
@@ -123,7 +181,10 @@ export default function Home() {
             {projects.map((project) => (
               <button
                 key={project.id}
-                onClick={() => refresh(project.id)}
+                onClick={() => {
+                  setSelectedVersion(project.current_version);
+                  refresh(project.id);
+                }}
                 className={`w-full rounded px-3 py-2 text-left text-sm ${detail?.project.id === project.id ? "bg-teal-50 text-teal-900" : "hover:bg-slate-100"}`}
               >
                 <div className="font-medium">{project.name}</div>
@@ -147,7 +208,16 @@ export default function Home() {
 
           <div className="mb-2 mt-5 text-xs font-semibold uppercase text-slate-500">Versions</div>
           <div className="flex flex-wrap gap-2">
-            {versions.length ? versions.map((version) => <span key={version} className="rounded bg-slate-100 px-2 py-1 text-xs">{version}</span>) : <span className="text-xs text-slate-500">No runs yet</span>}
+            {versions.length ? versions.map((version) => (
+              <button
+                key={version}
+                type="button"
+                onClick={() => setSelectedVersion(version)}
+                className={`rounded px-2 py-1 text-xs font-medium ${selectedVersion === version ? "bg-teal-700 text-white" : "bg-slate-100 hover:bg-slate-200"}`}
+              >
+                {version}
+              </button>
+            )) : <span className="text-xs text-slate-500">No runs yet</span>}
           </div>
         </div>
       </aside>
@@ -173,21 +243,23 @@ export default function Home() {
           <article className="min-w-0 overflow-auto border-r border-slate-200 bg-white p-5">
             <div className="mb-3 flex items-center justify-between">
               <h1 className="text-base font-bold">{artefactTabs.find((item) => item.key === selectedTab)?.label}</h1>
-              <span className="rounded bg-slate-100 px-2 py-1 text-xs">{activeArtefact?.version || "not generated"}</span>
+              <span className="rounded bg-slate-100 px-2 py-1 text-xs">{selectedVersion || activeArtefact?.version || "not generated"}</span>
             </div>
-            {activeArtefact?.content ? (
-              <div className="markdown" dangerouslySetInnerHTML={renderMarkdownLite(activeArtefact.content)} />
+            {activeArtefactLoaded ? (
+              <div className="markdown" dangerouslySetInnerHTML={renderMarkdownLite(activeArtefactContent || "")} />
+            ) : activeArtefact ? (
+              <div className="rounded border border-dashed border-slate-300 p-6 text-sm text-slate-600">Loading artefact...</div>
             ) : (
-              <div className="rounded border border-dashed border-slate-300 p-6 text-sm text-slate-600">Run the agent workflow to generate this artefact.</div>
+              <div className="rounded border border-dashed border-slate-300 p-6 text-sm text-slate-600">This artefact was not generated for {selectedVersion || "the selected version"}.</div>
             )}
           </article>
 
           <section className="min-w-0 overflow-auto bg-[#e9eef5] p-5">
             <div className="mb-3 flex items-center justify-between">
               <h1 className="text-base font-bold">Prototype Preview</h1>
-              <span className="rounded bg-white px-2 py-1 text-xs">{currentVersion}</span>
+              <span className="rounded bg-white px-2 py-1 text-xs">{selectedVersion || "not generated"}</span>
             </div>
-            {detail?.latest.prototype ? (
+            {activePrototype ? (
               <iframe key={`${prototypeSrc}-${focus}`} src={prototypeSrc} className="h-[calc(100%-2rem)] min-h-[640px] w-full rounded border border-slate-300 bg-white" />
             ) : (
               <div className="flex h-[640px] items-center justify-center rounded border border-dashed border-slate-300 bg-white text-sm text-slate-600">

@@ -103,12 +103,29 @@ def get_project(project_id: str) -> dict[str, Any]:
 
 def list_runs(project_id: str) -> list[dict[str, Any]]:
     with connect() as conn:
-        return [dict(row) for row in conn.execute("SELECT * FROM runs WHERE project_id = ? ORDER BY created_at DESC", (project_id,))]
+        rows = [dict(row) for row in conn.execute("SELECT * FROM runs WHERE project_id = ?", (project_id,))]
+    return sorted(rows, key=version_sort_key, reverse=True)
 
 
 def list_artefacts(project_id: str) -> list[dict[str, Any]]:
     with connect() as conn:
-        return [dict(row) for row in conn.execute("SELECT * FROM artefacts WHERE project_id = ? ORDER BY created_at DESC", (project_id,))]
+        rows = [dict(row) for row in conn.execute("SELECT * FROM artefacts WHERE project_id = ?", (project_id,))]
+    return sorted(rows, key=version_sort_key, reverse=True)
+
+
+def parse_version(version: str) -> tuple[int, ...]:
+    normalized = version.removeprefix("v").removeprefix("V")
+    parts: list[int] = []
+    for part in normalized.split("."):
+        try:
+            parts.append(int(part))
+        except ValueError:
+            parts.append(0)
+    return tuple(parts)
+
+
+def version_sort_key(row: dict[str, Any]) -> tuple[tuple[int, ...], str]:
+    return parse_version(row["version"]), row.get("created_at", "")
 
 
 def next_version(current: str) -> str:
