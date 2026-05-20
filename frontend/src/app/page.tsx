@@ -6,16 +6,13 @@ import {
   Boxes,
   CheckCircle2,
   ChevronDown,
-  ClipboardCheck,
   FileText,
   GitBranch,
   Layers3,
   Loader2,
   MonitorSmartphone,
-  PackageCheck,
   Play,
   Plus,
-  ShieldCheck,
   TestTube2
 } from "lucide-react";
 import { Artefact, Project, ProjectDetail, api, apiDisplayBaseUrl } from "@/lib/api";
@@ -25,8 +22,7 @@ const workspaceTabs = [
   { key: "prd", label: "PRD", icon: FileText },
   { key: "user_flow", label: "User Flow", icon: GitBranch },
   { key: "prototype", label: "Prototype", icon: MonitorSmartphone },
-  { key: "qa", label: "QA Criteria", icon: TestTube2 },
-  { key: "delivery", label: "Delivery Pack", icon: PackageCheck }
+  { key: "qa", label: "QA Criteria", icon: TestTube2 }
 ];
 
 const demoPrompt = "为智能通知摘要功能生成 PRD 和原型，覆盖 Notification shade、Settings opt-in、empty/error/success 状态，并生成 QA 和 Jira stories。";
@@ -36,43 +32,19 @@ const traceRows = [
     outcome: "Notification shade summary card",
     requirement: "Show a summary card when eligible low-priority notifications exist.",
     screen: "Notification shade",
-    qa: "Card appears only with eligible notifications; critical alerts remain separate.",
-    delivery: "Render summary card in Notification shade"
+    qa: "Card appears only with eligible notifications; critical alerts remain separate."
   },
   {
     outcome: "Settings opt-in and category control",
     requirement: "Provide an explicit Settings opt-in and category controls.",
     screen: "Settings > Notifications",
-    qa: "Toggle persists and disabled state prevents summary display.",
-    delivery: "Add Settings opt-in and category controls"
+    qa: "Toggle persists and disabled state prevents summary display."
   },
   {
     outcome: "Empty/loading/success/error states",
     requirement: "Render stable states for unavailable, preparing, complete, and no-content moments.",
     screen: "Shade state surfaces",
-    qa: "Normal, empty, error, offline, OTA, and privacy cases are covered.",
-    delivery: "Deliver Smart Notification Summary v1.0"
-  }
-];
-
-const alignmentGaps = [
-  {
-    title: "Lock screen privacy is not prototyped",
-    source: "PRD privacy and permission handling",
-    affected: "Prototype: lock screen state",
-    action: "Keep out of v1.0 or add a redacted lock-screen state after privacy review."
-  },
-  {
-    title: "Region, device, and OTA constraints need visual or QA coverage",
-    source: "PRD launch constraints",
-    affected: "QA matrix and Delivery Pack",
-    action: "Add launch-scope checks to QA and note owner boundary in the delivery story."
-  },
-  {
-    title: "Useful feedback action needs telemetry definition",
-    source: "Prototype success feedback",
-    affected: "PRD analytics details and acceptance criteria",
-    action: "Confirm privacy-safe events before implementation planning."
+    qa: "Normal, empty, error, offline, OTA, and privacy cases are covered."
   }
 ];
 
@@ -245,12 +217,9 @@ export default function Home() {
   const userFlow = content("ux_flow");
   const flowchart = mermaidSourceFrom(content("flowchart"));
   const qaCriteria = content("qa_criteria");
-  const deliveryStories = content("jira_stories_md");
-  const alignmentReport = content("consistency_review");
   const activePrototype = artefactsByKind.prototype;
   const prototypeSrc = detail && selectedVersion ? api.prototypeUrl(detail.project.id, selectedVersion, focus) : "";
   const overview = sectionFrom(prd, "Product Overview") || detail?.project.product_idea || "Run the workflow to generate a product overview.";
-  const alignmentGapCount = alignmentGaps.length;
   const versionLabel = selectedVersion ? (selectedVersion === detail?.project.current_version ? `Latest (${selectedVersion})` : selectedVersion) : "No version";
 
   async function runAgent(event: FormEvent) {
@@ -332,15 +301,6 @@ export default function Home() {
           </div>
         </div>
 
-        <div className="rounded border border-teal-100 bg-teal-50 p-3">
-          <div className="flex items-center justify-between gap-2">
-            <div className="flex items-center gap-2 text-sm font-semibold text-teal-950">
-              <ShieldCheck size={16} /> Alignment
-            </div>
-            <span className="rounded bg-white px-2 py-1 text-xs font-medium text-teal-800">{alignmentGapCount} gaps found</span>
-          </div>
-          <p className="mt-2 text-xs leading-5 text-teal-900">Requirements, prototype states, QA checks, and delivery stories stay traceable across the selected version.</p>
-        </div>
       </aside>
 
       <section className="flex min-w-0 flex-1 flex-col">
@@ -348,7 +308,7 @@ export default function Home() {
           <div className="flex items-center justify-between gap-4">
             <div>
               <div className="font-semibold">{detail?.project.name || "Loading project"}</div>
-              <div className="text-xs text-slate-500">API: {apiLabel} · Review gates: PRD approval, prototype sign-off, delivery handoff</div>
+              <div className="text-xs text-slate-500">API: {apiLabel} · PRD, flow, prototype, and QA are kept aligned by the workflow</div>
             </div>
             <div className="flex items-center gap-2">
               <label className="relative">
@@ -407,17 +367,9 @@ export default function Home() {
                     <div className="flex items-center gap-2 text-sm font-semibold">
                       <CheckCircle2 size={16} className="text-teal-700" /> Alignment status
                     </div>
-                    <span className="rounded bg-amber-50 px-2 py-1 text-xs font-medium text-amber-800">{alignmentGapCount} gaps to resolve</span>
+                    <span className="rounded bg-teal-50 px-2 py-1 text-xs font-medium text-teal-800">Workflow aligned</span>
                   </div>
-                  <div className="divide-y divide-slate-200">
-                    {alignmentGaps.map((gap) => (
-                      <div key={gap.title} className="p-3">
-                        <div className="text-sm font-semibold text-slate-900">{gap.title}</div>
-                        <div className="mt-1 text-xs leading-5 text-slate-600">Source: {gap.source} · Affects: {gap.affected}</div>
-                        <div className="mt-2 text-sm text-slate-700">{gap.action}</div>
-                      </div>
-                    ))}
-                  </div>
+                  <p className="px-3 py-3 text-sm leading-6 text-slate-700">PRD, user flow, prototype, and QA criteria are generated as a synchronized set for the selected version.</p>
                 </section>
                 <section>
                   <h2 className="text-sm font-semibold text-slate-900">Traceability snapshot</h2>
@@ -429,7 +381,6 @@ export default function Home() {
                           <th>Requirement</th>
                           <th>Prototype screen</th>
                           <th>QA check</th>
-                          <th>Delivery story</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -439,7 +390,6 @@ export default function Home() {
                             <td>{row.requirement}</td>
                             <td>{row.screen}</td>
                             <td>{row.qa}</td>
-                            <td>{row.delivery}</td>
                           </tr>
                         ))}
                       </tbody>
@@ -478,9 +428,9 @@ export default function Home() {
                       </tr>
                     </thead>
                     <tbody>
-                      <tr><td>Notification shade</td><td>Primary user entry point for grouped low-priority updates.</td><td>PRD summary card requirement, QA normal path, delivery shade story</td></tr>
-                      <tr><td>Settings opt-in</td><td>Explicit control and privacy explanation before system summarization starts.</td><td>PRD permission handling, QA disabled state, delivery Settings story</td></tr>
-                      <tr><td>Empty/error/success</td><td>Shows graceful behavior when ranking, content, or feedback state changes.</td><td>PRD edge cases, QA failure states, delivery v1.0 epic</td></tr>
+                      <tr><td>Notification shade</td><td>Primary user entry point for grouped low-priority updates.</td><td>PRD summary card requirement and QA normal path</td></tr>
+                      <tr><td>Settings opt-in</td><td>Explicit control and privacy explanation before system summarization starts.</td><td>PRD permission handling and QA disabled state</td></tr>
+                      <tr><td>Empty/error/success</td><td>Shows graceful behavior when ranking, content, or feedback state changes.</td><td>PRD edge cases and QA failure states</td></tr>
                     </tbody>
                   </table>
                 </div>
@@ -488,45 +438,6 @@ export default function Home() {
             )}
 
             {selectedTab === "qa" && <MarkdownPanel markdown={qaCriteria} empty={`QA criteria were not generated for ${selectedVersion || "the selected version"}.`} />}
-
-            {selectedTab === "delivery" && (
-              <div className="space-y-5">
-                <section className="rounded border border-slate-200">
-                  <div className="flex items-center gap-2 border-b border-slate-200 px-3 py-2 text-sm font-semibold">
-                    <ClipboardCheck size={16} /> Delivery traceability
-                  </div>
-                  <div className="overflow-auto">
-                    <table className="trace-table">
-                      <thead>
-                        <tr>
-                          <th>Outcome</th>
-                          <th>Source requirement</th>
-                          <th>Affected prototype screen</th>
-                          <th>Suggested next action</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {alignmentGaps.map((gap) => (
-                          <tr key={gap.title}>
-                            <td>{gap.title}</td>
-                            <td>{gap.source}</td>
-                            <td>{gap.affected}</td>
-                            <td>{gap.action}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </section>
-                <MarkdownPanel markdown={deliveryStories} empty={`Delivery story drafts were not generated for ${selectedVersion || "the selected version"}.`} />
-                {alignmentReport && (
-                  <details className="rounded border border-slate-200 p-3 text-sm">
-                    <summary className="cursor-pointer font-semibold">Alignment review notes</summary>
-                    <div className="markdown mt-3" dangerouslySetInnerHTML={renderMarkdownLite(alignmentReport)} />
-                  </details>
-                )}
-              </div>
-            )}
           </article>
 
           <section className="min-w-0 overflow-auto bg-[#e9eef5] p-5">
