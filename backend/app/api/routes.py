@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException, Response
 
-from app.models.schemas import ProjectCreate, RunCreate
+from app.models.schemas import ProjectCreate, ProjectUpdate, RunCreate
 from app.services import storage
 from app.workflow.product_graph import DEMO_IDEA, run_product_workflow
 
@@ -42,6 +42,14 @@ def get_project(project_id: str):
         "runs": storage.list_runs(project_id),
         "latest": storage.latest_by_kind(project_id),
     }
+
+
+@router.patch("/projects/{project_id}")
+def update_project(project_id: str, payload: ProjectUpdate):
+    try:
+        return storage.update_project(project_id, payload.name, payload.description, payload.product_idea)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Project not found") from exc
 
 
 @router.post("/projects/{project_id}/runs")

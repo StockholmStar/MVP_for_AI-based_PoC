@@ -15,10 +15,8 @@ ARTEFACT_SPECS = {
     "ux_flow": ("flows", "ux_flow_{version}.md", "text/markdown", "ux_flow_markdown"),
     "flowchart": ("flows", "flowchart_{version}.md", "text/markdown", "mermaid_flowchart"),
     "prototype": ("prototypes", "prototype_{version}.html", "text/html", "prototype_html"),
-    "consistency_review": ("reviews", "consistency_review_{version}.md", "text/markdown", "consistency_report"),
     "qa_criteria": ("qa", "qa_criteria_{version}.md", "text/markdown", "qa_criteria"),
-    "jira_stories_json": ("jira", "jira_stories_{version}.json", "application/json", "jira_stories"),
-    "jira_stories_md": ("jira", "jira_stories_{version}.md", "text/markdown", "jira_stories_markdown"),
+    "traceability": ("traceability", "traceability_{version}.md", "text/markdown", "traceability_markdown"),
 }
 
 
@@ -83,8 +81,24 @@ def create_project(name: str, description: str, product_idea: str) -> dict[str, 
             (project_id, name, description, product_idea, "v1.0", ts, ts),
         )
     (PROJECTS_DIR / project_id).mkdir(parents=True, exist_ok=True)
-    for dirname in ["requirements", "prototypes", "flows", "qa", "jira", "reviews"]:
+    for dirname in ["requirements", "prototypes", "flows", "qa", "traceability"]:
         (PROJECTS_DIR / project_id / dirname).mkdir(parents=True, exist_ok=True)
+    return get_project(project_id)
+
+
+def update_project(project_id: str, name: str | None = None, description: str | None = None, product_idea: str | None = None) -> dict[str, Any]:
+    project = get_project(project_id)
+    updated = {
+        "name": project["name"] if name is None else name.strip() or project["name"],
+        "description": project["description"] if description is None else description.strip(),
+        "product_idea": project["product_idea"] if product_idea is None else product_idea.strip() or project["product_idea"],
+    }
+    ts = now_iso()
+    with connect() as conn:
+        conn.execute(
+            "UPDATE projects SET name = ?, description = ?, product_idea = ?, updated_at = ? WHERE id = ?",
+            (updated["name"], updated["description"], updated["product_idea"], ts, project_id),
+        )
     return get_project(project_id)
 
 

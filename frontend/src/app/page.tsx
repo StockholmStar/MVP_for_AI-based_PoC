@@ -6,6 +6,9 @@ import {
   Boxes,
   CheckCircle2,
   ChevronDown,
+  Copy,
+  Download,
+  FileDown,
   FileText,
   GitBranch,
   Layers3,
@@ -13,6 +16,7 @@ import {
   MonitorSmartphone,
   Play,
   Plus,
+  Save,
   TestTube2
 } from "lucide-react";
 import { Artefact, Project, ProjectDetail, api } from "@/lib/api";
@@ -25,28 +29,7 @@ const workspaceTabs = [
   { key: "qa", label: "QA Criteria", icon: TestTube2 }
 ];
 
-const demoPrompt = "为智能通知摘要功能生成 PRD 和原型，覆盖 Notification shade、Settings opt-in、empty/error/success 状态，并生成 QA 和 Jira stories。";
-
-const traceRows = [
-  {
-    outcome: "Notification shade summary card",
-    requirement: "Show a summary card when eligible low-priority notifications exist.",
-    screen: "Notification shade",
-    qa: "Card appears only with eligible notifications; critical alerts remain separate."
-  },
-  {
-    outcome: "Settings opt-in and category control",
-    requirement: "Provide an explicit Settings opt-in and category controls.",
-    screen: "Settings > Notifications",
-    qa: "Toggle persists and disabled state prevents summary display."
-  },
-  {
-    outcome: "Empty/loading/success/error states",
-    requirement: "Render stable states for unavailable, preparing, complete, and no-content moments.",
-    screen: "Shade state surfaces",
-    qa: "Normal, empty, error, offline, OTA, and privacy cases are covered."
-  }
-];
+const demoPrompt = "为智能通知摘要功能生成 PRD、用户流、可交互原型和 QA 标准，覆盖 Notification shade、Settings opt-in、empty/error/success 状态。";
 
 function parseVersion(version: string) {
   return version
@@ -112,6 +95,15 @@ function sectionFrom(markdown: string, heading: string) {
   return match?.[1]?.trim() || "";
 }
 
+function traceRowsFrom(markdown: string) {
+  return markdown
+    .split("\n")
+    .filter((line) => line.startsWith("|") && !line.includes("---") && !line.includes("Product outcome"))
+    .map((line) => line.split("|").slice(1, -1).map((cell) => cell.trim()))
+    .filter((cells) => cells.length >= 4)
+    .map(([outcome, requirement, screen, qa]) => ({ outcome, requirement, screen, qa }));
+}
+
 function MermaidDiagram({ source }: { source: string }) {
   const [svg, setSvg] = useState("");
   const [error, setError] = useState("");
@@ -165,8 +157,11 @@ export default function Home() {
   const [log, setLog] = useState<string[]>(["Ready. Open the demo project or run the workflow."]);
   const [focus, setFocus] = useState("notification_summary_card");
   const [newName, setNewName] = useState("Smart Notification Summary");
+  const [newDescription, setNewDescription] = useState("Phone system software workflow for notification overload, Settings control, privacy, and QA.");
   const [selectedVersion, setSelectedVersion] = useState("");
   const [artefactContentById, setArtefactContentById] = useState<Record<string, string>>({});
+  const [projectDraft, setProjectDraft] = useState({ name: "", description: "", product_idea: "" });
+  const [savingProject, setSavingProject] = useState(false);
 
   async function refresh(projectId?: string) {
     const list = await api.listProjects();
@@ -195,6 +190,11 @@ export default function Home() {
     setSelectedVersion((previous) => {
       if (previous && versions.includes(previous)) return previous;
       return detail.project.current_version || versions[0] || "";
+    });
+    setProjectDraft({
+      name: detail.project.name,
+      description: detail.project.description,
+      product_idea: detail.project.product_idea
     });
   }, [detail, versions]);
 
@@ -232,7 +232,11 @@ export default function Home() {
   const userFlow = content("ux_flow");
   const flowchart = mermaidSourceFrom(content("flowchart"));
   const qaCriteria = content("qa_criteria");
+  const traceability = content("traceability");
+  const traceRows = traceRowsFrom(traceability);
   const activePrototype = artefactsByKind.prototype;
+  const activeArtefact = selectedTab === "prd" ? artefactsByKind.prd : selectedTab === "user_flow" ? artefactsByKind.ux_flow : selectedTab === "qa" ? artefactsByKind.qa_criteria : selectedTab === "prototype" ? activePrototype : artefactsByKind.traceability;
+  const activeMarkdown = selectedTab === "prd" ? prd : selectedTab === "user_flow" ? userFlow : selectedTab === "qa" ? qaCriteria : selectedTab === "overview" ? traceability : "";
   const prototypeSrc = detail && selectedVersion ? api.prototypeUrl(detail.project.id, selectedVersion, focus) : "";
   const overview = sectionFrom(prd, "Product Overview") || detail?.project.product_idea || "Run the workflow to generate a product overview.";
   const versionLabel = selectedVersion ? (selectedVersion === detail?.project.current_version ? `Latest (${selectedVersion})` : selectedVersion) : "No version";
@@ -276,12 +280,35 @@ export default function Home() {
     event.preventDefault();
     const project = await api.createProject({
       name: newName || "Untitled Product",
-      description: "Draft project created from the current product brief.",
+      description: newDescription,
       product_idea: input
     });
     setSelectedVersion(project.current_version);
     await refresh(project.id);
     setLog((items) => [`Created project ${project.name}`, ...items]);
+  }
+
+  async function saveProject(event: FormEvent) {
+    event.preventDefault();
+    if (!detail) return;
+    setSavingProject(true);
+    try {
+      const project = await api.updateProject(detail.project.id, projectDraft);
+      setInput(project.product_idea);
+      await refresh(project.id);
+      setLog((items) => [`Saved project context for ${project.name}`, ...items]);
+    } catch (error) {
+      setLog((items) => [`Save failed: ${(error as Error).message}`, ...items]);
+    } finally {
+      setSavingProject(false);
+    }
+  }
+
+  async function copyActiveArtefact() {
+    const value = selectedTab === "prototype" ? prototypeSrc : activeMarkdown;
+    if (!value) return;
+    await navigator.clipboard.writeText(value);
+    setLog((items) => [`Copied ${workspaceTabs.find((item) => item.key === selectedTab)?.label || "artefact"} to clipboard`, ...items]);
   }
 
   function MarkdownPanel({ markdown, empty }: { markdown: string; empty: string }) {
@@ -298,11 +325,11 @@ export default function Home() {
           <div className="flex items-center gap-2 text-lg font-bold">
             <Boxes size={20} /> AI Product Workspace
           </div>
-          <p className="mt-1 text-xs text-slate-500">Product planning workspace for PM, UX, R&D, and QA alignment.</p>
         </div>
 
         <form onSubmit={createProject} className="space-y-2">
-          <input value={newName} onChange={(event) => setNewName(event.target.value)} className="w-full rounded border border-slate-300 px-3 py-2 text-sm" />
+          <input aria-label="New project name" value={newName} onChange={(event) => setNewName(event.target.value)} className="w-full rounded border border-slate-300 px-3 py-2 text-sm" />
+          <textarea aria-label="New project description" value={newDescription} onChange={(event) => setNewDescription(event.target.value)} className="h-16 w-full resize-none rounded border border-slate-300 px-3 py-2 text-sm" />
           <button className="flex w-full items-center justify-center gap-2 rounded bg-slate-900 px-3 py-2 text-sm font-medium text-white">
             <Plus size={15} /> New project
           </button>
@@ -359,6 +386,18 @@ export default function Home() {
                 <option value="error_state">Error state</option>
                 <option value="success_feedback">Success feedback</option>
               </select>
+              <button type="button" onClick={copyActiveArtefact} disabled={!activeArtefact && selectedTab !== "prototype"} className="flex items-center gap-2 rounded border border-slate-300 bg-white px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-50">
+                <Copy size={15} /> Copy
+              </button>
+              {detail && activeArtefact ? (
+                <a href={api.artefactUrl(detail.project.id, activeArtefact.id)} download className="flex items-center gap-2 rounded border border-slate-300 bg-white px-3 py-2 text-sm">
+                  <Download size={15} /> Download
+                </a>
+              ) : selectedTab === "prototype" && prototypeSrc ? (
+                <a href={prototypeSrc} target="_blank" rel="noreferrer" className="flex items-center gap-2 rounded border border-slate-300 bg-white px-3 py-2 text-sm">
+                  <FileDown size={15} /> Open
+                </a>
+              ) : null}
             </div>
           </div>
 
@@ -384,6 +423,34 @@ export default function Home() {
 
             {selectedTab === "overview" && (
               <div className="space-y-4">
+                <form onSubmit={saveProject} className="rounded border border-slate-200 bg-slate-50 p-3">
+                  <div className="mb-2 flex items-center justify-between gap-3">
+                    <h2 className="text-sm font-semibold text-slate-900">Project context</h2>
+                    <button type="submit" disabled={savingProject || !detail} className="flex items-center gap-2 rounded bg-white px-3 py-2 text-sm font-medium text-slate-800 ring-1 ring-slate-300 disabled:cursor-not-allowed disabled:opacity-50">
+                      {savingProject ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />} Save
+                    </button>
+                  </div>
+                  <div className="grid gap-2">
+                    <input
+                      aria-label="Project name"
+                      value={projectDraft.name}
+                      onChange={(event) => setProjectDraft((draft) => ({ ...draft, name: event.target.value }))}
+                      className="rounded border border-slate-300 bg-white px-3 py-2 text-sm"
+                    />
+                    <textarea
+                      aria-label="Project description"
+                      value={projectDraft.description}
+                      onChange={(event) => setProjectDraft((draft) => ({ ...draft, description: event.target.value }))}
+                      className="h-16 resize-none rounded border border-slate-300 bg-white px-3 py-2 text-sm"
+                    />
+                    <textarea
+                      aria-label="Product idea"
+                      value={projectDraft.product_idea}
+                      onChange={(event) => setProjectDraft((draft) => ({ ...draft, product_idea: event.target.value }))}
+                      className="h-24 resize-none rounded border border-slate-300 bg-white px-3 py-2 text-sm"
+                    />
+                  </div>
+                </form>
                 <section>
                   <h2 className="text-sm font-semibold text-slate-900">Product direction</h2>
                   <p className="mt-2 text-sm leading-6 text-slate-700">{overview}</p>
@@ -391,9 +458,9 @@ export default function Home() {
                 <section className="rounded border border-slate-200">
                   <div className="flex items-center justify-between border-b border-slate-200 px-3 py-2">
                     <div className="flex items-center gap-2 text-sm font-semibold">
-                      <CheckCircle2 size={16} className="text-teal-700" /> Alignment status
+                      <CheckCircle2 size={16} className="text-teal-700" /> Output set
                     </div>
-                    <span className="rounded bg-teal-50 px-2 py-1 text-xs font-medium text-teal-800">Workflow aligned</span>
+                    <span className="rounded bg-teal-50 px-2 py-1 text-xs font-medium text-teal-800">Ready for PM demo</span>
                   </div>
                   <p className="px-3 py-3 text-sm leading-6 text-slate-700">PRD, user flow, prototype, and QA criteria are generated as a synchronized set for the selected version.</p>
                 </section>
@@ -410,14 +477,18 @@ export default function Home() {
                         </tr>
                       </thead>
                       <tbody>
-                        {traceRows.map((row) => (
+                        {traceRows.length ? traceRows.map((row) => (
                           <tr key={row.outcome}>
                             <td>{row.outcome}</td>
                             <td>{row.requirement}</td>
                             <td>{row.screen}</td>
                             <td>{row.qa}</td>
                           </tr>
-                        ))}
+                        )) : (
+                          <tr>
+                            <td colSpan={4}>Run the workflow to generate traceability across product outcomes, PRD requirements, user flow, prototype states, and QA criteria.</td>
+                          </tr>
+                        )}
                       </tbody>
                     </table>
                   </div>

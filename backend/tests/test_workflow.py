@@ -7,7 +7,8 @@ def test_workflow_generates_core_artefacts():
     assert "Functional Requirements" in state["prd_markdown"]
     assert "```mermaid" in state["mermaid_flowchart"]
     assert "notification_summary_card" in state["prototype_html"]
-    assert state["jira_stories"][0]["prototype_feature_id"]
+    assert "Traceability Matrix" in state["traceability_markdown"]
+    assert "FR-01 Summary card" in state["traceability_markdown"]
 
 
 def test_product_overview_does_not_echo_agent_instruction():

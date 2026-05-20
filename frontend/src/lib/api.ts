@@ -88,9 +88,12 @@ export const api = {
   getProject: (id: string) => request<ProjectDetail>(`/api/projects/${id}`),
   createProject: (payload: { name: string; description: string; product_idea: string }) =>
     request<Project>("/api/projects", { method: "POST", body: JSON.stringify(payload) }),
+  updateProject: (id: string, payload: { name?: string; description?: string; product_idea?: string }) =>
+    request<Project>(`/api/projects/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
   runWorkflow: (id: string, user_input: string) =>
     request(`/api/projects/${id}/runs`, { method: "POST", body: JSON.stringify({ user_input }) }),
   getArtefactContent: (projectId: string, artefactId: string) => requestText(`/api/projects/${projectId}/artefacts/${artefactId}`),
+  artefactUrl: (projectId: string, artefactId: string) => `${apiBaseUrl()}/api/projects/${projectId}/artefacts/${artefactId}`,
   prototypeUrl: (id: string, version: string, focus?: string) =>
     `${apiBaseUrl()}/api/projects/${id}/prototype/${version}${focus ? `?focus=${encodeURIComponent(focus)}` : ""}`
 };

@@ -16,10 +16,35 @@ def test_demo_project_and_run():
     body = run.json()
     assert body["run"]["version"].startswith("v")
     assert any(item["kind"] == "prototype" for item in body["artefacts"])
+    assert {item["kind"] for item in body["artefacts"]} == {"prd", "ux_flow", "flowchart", "prototype", "qa_criteria", "traceability"}
 
     detail = client.get(f"/api/projects/{project_id}")
     assert detail.status_code == 200
     assert "prd" in detail.json()["latest"]
+    assert "traceability" in detail.json()["latest"]
+
+
+def test_project_context_can_be_updated():
+    created = client.post(
+        "/api/projects",
+        json={"name": "Camera Privacy", "description": "Initial", "product_idea": "Camera privacy indicators"},
+    )
+    assert created.status_code == 200
+    project_id = created.json()["id"]
+
+    updated = client.patch(
+        f"/api/projects/{project_id}",
+        json={
+            "name": "Camera Privacy Controls",
+            "description": "Settings and System UI privacy workflow",
+            "product_idea": "Improve camera privacy indicators for Android system software.",
+        },
+    )
+
+    assert updated.status_code == 200
+    assert updated.json()["name"] == "Camera Privacy Controls"
+    assert updated.json()["description"] == "Settings and System UI privacy workflow"
+    assert "camera privacy indicators" in updated.json()["product_idea"].lower()
 
 
 def test_project_detail_orders_versions_numerically(monkeypatch):

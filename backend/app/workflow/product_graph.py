@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, TypedDict
+from typing import TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
@@ -19,10 +19,8 @@ class ProductState(TypedDict, total=False):
     mermaid_flowchart: str
     prototype_html: str
     feature_map: dict[str, str]
-    consistency_report: str
+    traceability_markdown: str
     qa_criteria: str
-    jira_stories: list[dict[str, Any]]
-    jira_stories_markdown: str
     open_questions: list[str]
     version: str
     status: str
@@ -371,22 +369,18 @@ def generate_prototype(state: ProductState) -> ProductState:
     return {"prototype_html": html, "status": "prototype_generated"}
 
 
-def check_consistency(state: ProductState) -> ProductState:
-    report = """# Internal Alignment Validation
+def generate_traceability(state: ProductState) -> ProductState:
+    traceability = """# Traceability Matrix
 
-## Summary
-Internal alignment validation passed for the generated product workspace artefacts.
-
-## Validation Scope
-- PRD requirements are reflected in the user flow.
-- Prototype focus IDs map to the documented flow states.
-- QA criteria cover the primary path, boundary states, and failure states.
-- Cross-artefact terminology is normalized for the selected version.
-
-## Result
-PRD, user flow, prototype, and QA criteria are ready to present as an aligned output set.
+| Product outcome | PRD requirement | User flow / prototype state | QA criterion |
+| --- | --- | --- | --- |
+| Reduce notification overload without hiding urgent alerts. | FR-01 Summary card: Show a summary card in Notification shade when low-priority notifications exist. | Main flow steps 2-5; `notification_summary_card` prototype focus. | Card appears only with eligible notifications; critical notifications remain separate. |
+| Give users explicit control before system summarization starts. | FR-02 Settings control: Provide Settings opt-in toggle and category controls. | Main flow step 1; `settings_toggle` prototype focus. | Toggle persists across restart; disabled state prevents summary display. |
+| Make no-content moments understandable and non-disruptive. | FR-03 Empty state: Show empty state when no summarizable notifications exist. | Alternate flow: Empty; `empty_state` prototype focus. | No eligible notifications shows empty state and normal notifications are unaffected. |
+| Preserve the normal notification list when ranking cannot run. | FR-04 Error state: Show error/offline state when ranking data cannot be prepared. | Alternate flow: Error; `error_state` prototype focus. | Ranking unavailable shows error state and standard notification list remains visible. |
+| Capture lightweight user feedback for future tuning. | FR-05 Success feedback: Show success feedback after useful/tuning actions. | Main flow step 5; `success_feedback` prototype focus. | Useful action shows success feedback without removing critical notifications. |
 """
-    return {"consistency_report": report, "status": "reviewed"}
+    return {"traceability_markdown": traceability, "status": "traceability_generated"}
 
 
 def generate_qa(state: ProductState) -> ProductState:
@@ -421,53 +415,8 @@ def generate_qa(state: ProductState) -> ProductState:
     return {"qa_criteria": qa, "status": "qa_generated"}
 
 
-def generate_jira(state: ProductState) -> ProductState:
-    stories = [
-        {
-            "type": "Epic",
-            "title": "Deliver Smart Notification Summary v1.0",
-            "user_story": "As a phone user, I want low-priority notifications summarized so I can focus on important alerts.",
-            "description": "Build the opt-in system experience across Notification shade and Settings.",
-            "acceptance_criteria": ["PRD FR-01 through FR-05 are implemented", "QA normal, empty, error, and privacy scenarios pass"],
-            "dependencies": ["System UI surface", "Settings toggle", "Notification ranking contract"],
-            "prd_sections": ["Functional Requirements", "Privacy and Permission Handling"],
-            "prototype_experience": "Notification shade summary card",
-            "prototype_feature_id": "notification_summary_card",
-        },
-        {
-            "type": "Story",
-            "title": "Render summary card in Notification shade",
-            "user_story": "As a user, I can see grouped low-priority notifications in one card.",
-            "description": "Create default, loading, empty, error, and success rendering states.",
-            "acceptance_criteria": ["Card appears only with eligible notifications", "Critical notifications remain separate"],
-            "dependencies": ["Notification metadata", "System UI layout"],
-            "prd_sections": ["Summary card requirement", "Key States and Edge Cases"],
-            "prototype_experience": "Notification shade summary card",
-            "prototype_feature_id": "notification_summary_card",
-        },
-        {
-            "type": "Story",
-            "title": "Add Settings opt-in and category controls",
-            "user_story": "As a user, I can control whether summaries are enabled and which categories are included.",
-            "description": "Expose toggle and category controls under Settings > Notifications.",
-            "acceptance_criteria": ["Toggle persists across restart", "Disabled state prevents summary display"],
-            "dependencies": ["Settings storage", "System UI state sync"],
-            "prd_sections": ["Settings control requirement", "Owner Boundaries"],
-            "prototype_experience": "Settings opt-in",
-            "prototype_feature_id": "settings_toggle",
-        },
-    ]
-    md = "\n\n".join(
-        f"## {item['type']}: {item['title']}\n"
-        f"**User story:** {item['user_story']}\n\n"
-        f"**Description:** {item['description']}\n\n"
-        f"**Acceptance criteria:**\n" + "\n".join(f"- {criterion}" for criterion in item["acceptance_criteria"]) + "\n\n"
-        f"**Dependencies:** {', '.join(item['dependencies'])}\n\n"
-        f"**PRD trace:** {', '.join(item['prd_sections'])}\n\n"
-        f"**Prototype screen/state:** {item['prototype_experience']}"
-        for item in stories
-    )
-    return {"jira_stories": stories, "jira_stories_markdown": md, "status": "completed"}
+def complete_workspace(state: ProductState) -> ProductState:
+    return {"status": "completed"}
 
 
 def build_graph():
@@ -476,17 +425,17 @@ def build_graph():
     graph.add_node("prd", generate_prd)
     graph.add_node("ux", generate_ux_flow)
     graph.add_node("prototype", generate_prototype)
-    graph.add_node("review", check_consistency)
+    graph.add_node("traceability", generate_traceability)
     graph.add_node("qa", generate_qa)
-    graph.add_node("jira", generate_jira)
+    graph.add_node("complete", complete_workspace)
     graph.add_edge(START, "clarify")
     graph.add_edge("clarify", "prd")
     graph.add_edge("prd", "ux")
     graph.add_edge("ux", "prototype")
-    graph.add_edge("prototype", "review")
-    graph.add_edge("review", "qa")
-    graph.add_edge("qa", "jira")
-    graph.add_edge("jira", END)
+    graph.add_edge("prototype", "traceability")
+    graph.add_edge("traceability", "qa")
+    graph.add_edge("qa", "complete")
+    graph.add_edge("complete", END)
     return graph.compile()
 
 

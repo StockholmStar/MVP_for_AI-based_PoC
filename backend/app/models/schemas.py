@@ -9,6 +9,12 @@ class ProjectCreate(BaseModel):
     product_idea: str = Field(default="")
 
 
+class ProjectUpdate(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    product_idea: str | None = None
+
+
 class RunCreate(BaseModel):
     user_input: str
 
