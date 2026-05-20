@@ -53,6 +53,79 @@ export type ProjectDetail = {
   artefacts: Artefact[];
   runs: Array<{ id: string; version: string; status: string; message: string; created_at: string }>;
   latest: Record<string, Artefact>;
+  canonical?: CanonicalState | null;
+  gate_results?: GateResultRecord[];
+  agent_runs?: AgentRunRecord[];
+  runtime_mode?: RuntimeMode;
+};
+
+export type RuntimeMode = {
+  llm_enabled: boolean;
+  mode: string;
+  model: string | null;
+  workflow: string;
+};
+
+export type CanonicalState = {
+  version: string;
+  metadata: Record<string, unknown>;
+  source_brief: string;
+  functional_requirements: Array<Record<string, unknown>>;
+  ux_states: Array<Record<string, unknown>>;
+  prototype_screens: Array<Record<string, unknown>>;
+  qa_criteria: Array<Record<string, unknown>>;
+  gate_results: GateResult[];
+  agent_run_history: Array<Record<string, unknown>>;
+};
+
+export type GateResult = {
+  gate_id: string;
+  status: "pass" | "fail" | "needs_human" | "skipped";
+  score: number;
+  severity: string;
+  failed_checks: string[];
+  feedback: string;
+  revision_target?: string | null;
+  attempt_count: number;
+  timestamp: string;
+};
+
+export type GateResultRecord = {
+  id: string;
+  project_id: string;
+  version: string;
+  gate_id: string;
+  status: string;
+  created_at: string;
+  result: GateResult;
+};
+
+export type AgentRunRecord = {
+  id: string;
+  project_id: string;
+  version: string;
+  agent_id: string;
+  created_at: string;
+  run: Record<string, unknown>;
+};
+
+export type AgentDefinition = {
+  id: string;
+  name: string;
+  role: string;
+  input_contract: string;
+  output_contract: string;
+  system_prompt: string;
+  deterministic_fallback_policy: string;
+  model_config_ref: string;
+  quality_checklist: string[];
+};
+
+export type PlatformStatus = {
+  runtime_mode: RuntimeMode;
+  agents: AgentDefinition[];
+  gates: Array<{ id: string; name: string; routes: string[] }>;
+  conditional_routes: string[];
 };
 
 export type AdjustmentPlan = {
@@ -108,6 +181,7 @@ async function requestText(path: string): Promise<string> {
 
 export const api = {
   listProjects: () => request<Project[]>("/api/projects"),
+  platform: () => request<PlatformStatus>("/api/platform"),
   demoProject: () => request<Project>("/api/projects/demo"),
   getProject: (id: string) => request<ProjectDetail>(`/api/projects/${id}`),
   createProject: (payload: { name: string; description: string; product_idea: string }) =>

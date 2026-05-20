@@ -22,6 +22,18 @@ def test_demo_project_and_run():
     assert detail.status_code == 200
     assert "prd" in detail.json()["latest"]
     assert "traceability" in detail.json()["latest"]
+    assert detail.json()["canonical"]["version"] == body["run"]["version"]
+    assert detail.json()["gate_results"]
+    assert detail.json()["agent_runs"]
+
+
+def test_platform_exposes_agents_gates_and_runtime():
+    response = client.get("/api/platform")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["runtime_mode"]["mode"] == "LLM mode: deterministic fallback"
+    assert {agent["id"] for agent in body["agents"]} >= {"coordinator", "prd", "qa", "human_approval"}
+    assert {gate["id"] for gate in body["gates"]} >= {"input_readiness", "final_alignment"}
 
 
 def test_project_context_can_be_updated():

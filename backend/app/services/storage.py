@@ -75,6 +75,33 @@ def init_db() -> None:
                 updated_at TEXT NOT NULL,
                 FOREIGN KEY(project_id) REFERENCES projects(id)
             );
+            CREATE TABLE IF NOT EXISTS canonical_states (
+                id TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL,
+                version TEXT NOT NULL,
+                state_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(project_id) REFERENCES projects(id)
+            );
+            CREATE TABLE IF NOT EXISTS gate_results (
+                id TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL,
+                version TEXT NOT NULL,
+                gate_id TEXT NOT NULL,
+                status TEXT NOT NULL,
+                result_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(project_id) REFERENCES projects(id)
+            );
+            CREATE TABLE IF NOT EXISTS agent_runs (
+                id TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL,
+                version TEXT NOT NULL,
+                agent_id TEXT NOT NULL,
+                run_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(project_id) REFERENCES projects(id)
+            );
             """
         )
 
@@ -139,7 +166,7 @@ def list_artefacts(project_id: str) -> list[dict[str, Any]]:
 
 
 def latest_state(project_id: str, version: str | None = None) -> dict[str, Any]:
-    state: dict[str, Any] = {}
+    state = latest_canonical_state(project_id, version)
     artefacts = list_artefacts(project_id)
     if version:
         artefacts = [artefact for artefact in artefacts if artefact["version"] == version]
@@ -155,6 +182,22 @@ def latest_state(project_id: str, version: str | None = None) -> dict[str, Any]:
         except FileNotFoundError:
             state[state_key] = ""
     return state
+
+
+def latest_canonical_state(project_id: str, version: str | None = None) -> dict[str, Any]:
+    query = "SELECT * FROM canonical_states WHERE project_id = ?"
+    params: list[Any] = [project_id]
+    if version:
+        query += " AND version = ?"
+        params.append(version)
+    query += " ORDER BY created_at DESC"
+    with connect() as conn:
+        rows = [dict(row) for row in conn.execute(query, params)]
+    if not rows:
+        return {}
+    rows = sorted(rows, key=version_sort_key, reverse=True)
+    canonical = json.loads(rows[0]["state_json"])
+    return {"canonical_state": canonical}
 
 
 def parse_version(version: str) -> tuple[int, ...]:
@@ -186,6 +229,39 @@ def save_run_and_artefacts(project_id: str, user_input: str, state: dict[str, An
     artefacts: list[dict[str, Any]] = []
     with connect() as conn:
         conn.execute("UPDATE projects SET current_version = ?, product_idea = ?, updated_at = ? WHERE id = ?", (version, state.get("product_idea", user_input), ts, project_id))
+        canonical_state = state.get("canonical_state")
+        if canonical_state:
+            canonical_state["version"] = version
+            state["canonical_state"] = canonical_state
+            conn.execute(
+                "INSERT INTO canonical_states VALUES (?, ?, ?, ?, ?)",
+                (str(uuid.uuid4()), project_id, version, json.dumps(canonical_state, ensure_ascii=False), ts),
+            )
+            for result in canonical_state.get("gate_results", state.get("gate_results", [])):
+                conn.execute(
+                    "INSERT INTO gate_results VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        str(uuid.uuid4()),
+                        project_id,
+                        version,
+                        result.get("gate_id", "unknown"),
+                        result.get("status", "skipped"),
+                        json.dumps(result, ensure_ascii=False),
+                        ts,
+                    ),
+                )
+            for run_record in canonical_state.get("agent_run_history", state.get("agent_run_history", [])):
+                conn.execute(
+                    "INSERT INTO agent_runs VALUES (?, ?, ?, ?, ?, ?)",
+                    (
+                        str(uuid.uuid4()),
+                        project_id,
+                        version,
+                        run_record.get("agent_id", "unknown"),
+                        json.dumps(run_record, ensure_ascii=False),
+                        ts,
+                    ),
+                )
         for kind, (folder, filename, content_type, state_key) in ARTEFACT_SPECS.items():
             content = state.get(state_key)
             if content is None:
@@ -219,6 +295,30 @@ def save_run_and_artefacts(project_id: str, user_input: str, state: dict[str, An
         }
         conn.execute("INSERT INTO runs VALUES (?, ?, ?, ?, ?, ?, ?)", tuple(run.values()))
     return run, artefacts, get_project(project_id)
+
+
+def list_gate_results(project_id: str, version: str | None = None) -> list[dict[str, Any]]:
+    query = "SELECT * FROM gate_results WHERE project_id = ?"
+    params: list[Any] = [project_id]
+    if version:
+        query += " AND version = ?"
+        params.append(version)
+    with connect() as conn:
+        rows = [dict(row) for row in conn.execute(query, params)]
+    rows = sorted(rows, key=version_sort_key, reverse=True)
+    return [{**row, "result": json.loads(row["result_json"])} for row in rows]
+
+
+def list_agent_runs(project_id: str, version: str | None = None) -> list[dict[str, Any]]:
+    query = "SELECT * FROM agent_runs WHERE project_id = ?"
+    params: list[Any] = [project_id]
+    if version:
+        query += " AND version = ?"
+        params.append(version)
+    with connect() as conn:
+        rows = [dict(row) for row in conn.execute(query, params)]
+    rows = sorted(rows, key=version_sort_key, reverse=True)
+    return [{**row, "run": json.loads(row["run_json"])} for row in rows]
 
 
 def create_pending_approval(project_id: str, user_input: str, rationale: str, proposed_state: dict[str, Any]) -> dict[str, Any]:

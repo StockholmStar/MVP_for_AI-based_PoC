@@ -3,6 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from app.domain.workspace import ProductWorkspaceState
+from app.services.storage import now_iso
+from app.workflow.renderers import render_all
+
 
 STATE_KEYS = {
     "prd": "prd_markdown",
@@ -107,6 +111,9 @@ def summarize_request(message: str) -> str:
 
 def apply_adjustment_to_state(base_state: dict[str, Any], message: str, selected_tab: str | None = None) -> tuple[dict[str, Any], AdjustmentPlan]:
     plan = route_adjustment(message, selected_tab)
+    if base_state.get("canonical_state"):
+        return apply_adjustment_to_canonical_state(base_state, plan)
+
     state = dict(base_state)
     summary = plan.summary
 
@@ -157,6 +164,78 @@ def apply_adjustment_to_state(base_state: dict[str, Any], message: str, selected
         row = TRACE_ROW.format(summary=summary.replace("|", "/"), focus=plan.focus)
         state["traceability_markdown"] = f"{traceability.rstrip()}\n{row}\n"
 
+    state["status"] = "adjustment_prepared" if plan.risky else "adjustment_applied"
+    state["adjustment_plan"] = {
+        "focus": plan.focus,
+        "impacted": list(plan.impacted),
+        "risky": plan.risky,
+        "rationale": plan.rationale,
+        "summary": plan.summary,
+    }
+    return state, plan
+
+
+def apply_adjustment_to_canonical_state(base_state: dict[str, Any], plan: AdjustmentPlan) -> tuple[dict[str, Any], AdjustmentPlan]:
+    workspace = ProductWorkspaceState.model_validate(base_state["canonical_state"])
+    summary = plan.summary
+    workspace.open_questions.append(f"Adjustment request to confirm: {summary}")
+
+    if "prd" in plan.impacted:
+        workspace.assumptions.append(f"Applied adjustment: {summary}")
+        workspace.risks.append(
+            {
+                "id": f"R-adjustment-{len(workspace.risks) + 1:02d}",
+                "description": "Adjustment review must preserve privacy, power, OTA, region, model, and owner-boundary constraints.",
+            }
+        )
+
+    if "user_flow" in plan.impacted:
+        workspace.flows.append({"from": "G", "to": "H", "label": f"Adjusted focus: {plan.focus}"})
+
+    if "prototype" in plan.impacted and all(screen.get("state_id") != "adjustment_note" for screen in workspace.prototype_screens):
+        workspace.prototype_screens.append(
+            {
+                "state_id": "adjustment_note",
+                "label": "Update",
+                "title": "Applied adjustment",
+                "body": f"{summary} Focus: {plan.focus}.",
+            }
+        )
+
+    if "qa" in plan.impacted:
+        workspace.qa_criteria.append(
+            {
+                "id": f"QA-ADJ-{len(workspace.qa_criteria) + 1:02d}",
+                "requirement_id": "ADJ-01",
+                "criterion": f"Validate requested change: {summary}. Confirm {plan.focus} and rerun privacy, power, OTA, region, model, and owner-boundary checks.",
+            }
+        )
+
+    if "traceability" in plan.impacted:
+        workspace.trace_links.append(
+            {
+                "outcome": "Adjustment coverage.",
+                "requirement_id": "ADJ-01",
+                "requirement": f"Applied request: {summary}",
+                "prototype_state": plan.focus,
+                "qa_id": "QA-ADJ",
+                "qa": "QA validates surface, entry, device state, privacy, power, OTA, region, model, and owner-boundary behavior.",
+            }
+        )
+
+    workspace.agent_run_history.append(
+        {
+            "agent_id": "coordinator",
+            "agent_name": "Coordinator Agent",
+            "runtime": "LLM mode: deterministic fallback",
+            "model": None,
+            "used_llm": False,
+            "timestamp": now_iso(),
+            "summary": f"Routed adjustment to {', '.join(plan.impacted)}.",
+        }
+    )
+    state = {**base_state, "canonical_state": workspace.model_dump(), **render_all(workspace)}
+    state["product_idea"] = workspace.source_brief
     state["status"] = "adjustment_prepared" if plan.risky else "adjustment_applied"
     state["adjustment_plan"] = {
         "focus": plan.focus,

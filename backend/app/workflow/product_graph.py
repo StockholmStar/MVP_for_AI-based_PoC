@@ -1,31 +1,35 @@
 from __future__ import annotations
 
-from typing import TypedDict
+from typing import Any, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
+from app.domain.workspace import ProductWorkspaceState
 from app.services.context_loader import load_context_pack
-from app.services.llm import ModelClient
+from app.workflow.agents import AgentExecutor, agent_definitions
+from app.workflow.gates import append_gate, gate_result, latest_attempt
+from app.workflow.renderers import render_all
 
 
 class ProductState(TypedDict, total=False):
     project_id: str
     user_input: str
     product_idea: str
-    clarification_questions: list[str]
-    assumptions: list[str]
+    canonical_state: dict[str, Any]
     prd_markdown: str
     ux_flow_markdown: str
     mermaid_flowchart: str
     prototype_html: str
-    feature_map: dict[str, str]
     traceability_markdown: str
     qa_criteria: str
-    open_questions: list[str]
     version: str
     status: str
     errors: list[str]
     context_pack: str
+    runtime_mode: dict[str, Any]
+    gate_results: list[dict[str, Any]]
+    agent_run_history: list[dict[str, Any]]
+    pending_approval_request: dict[str, Any] | None
 
 
 DEMO_IDEA = (
@@ -33,16 +37,6 @@ DEMO_IDEA = (
     "notifications into a summary card in Notification shade, with Settings controls, "
     "privacy safeguards, empty/error states, and QA-ready acceptance criteria."
 )
-
-
-FEATURE_MAP = {
-    "FR-01": "notification_summary_card",
-    "FR-02": "settings_toggle",
-    "FR-03": "empty_state",
-    "FR-04": "error_state",
-    "FR-05": "success_feedback",
-}
-
 
 AGENT_INSTRUCTION_MARKERS = (
     "agent",
@@ -60,387 +54,396 @@ AGENT_INSTRUCTION_MARKERS = (
     "运行",
 )
 
+WORKFLOW_CONDITIONAL_ROUTES = [
+    "input_gate",
+    "prd_gate",
+    "ux_prototype_gate",
+    "qa_gate",
+    "final_alignment_gate",
+]
+
 
 def product_summary_from_input(user_input: str) -> str:
     candidate = user_input.strip()
     if not candidate:
         return DEMO_IDEA
-
     lower_candidate = candidate.lower()
     if any(marker in lower_candidate for marker in AGENT_INSTRUCTION_MARKERS):
         return DEMO_IDEA
-
     return candidate
 
 
-def clarify_requirements(state: ProductState) -> ProductState:
-    user_input = state.get("user_input") or DEMO_IDEA
+def workspace_from_state(state: ProductState) -> ProductWorkspaceState:
+    existing = state.get("canonical_state") or {}
+    if existing:
+        return ProductWorkspaceState.model_validate(existing)
+    return ProductWorkspaceState(project_id=state["project_id"], source_brief=product_summary_from_input(state.get("user_input", "")))
+
+
+def state_from_workspace(state: ProductState, workspace: ProductWorkspaceState) -> ProductState:
+    rendered = render_all(workspace)
     return {
-        "product_idea": product_summary_from_input(user_input),
-        "context_pack": load_context_pack(),
-        "assumptions": [
-            "Feature ships as an opt-in system experience for Android 15+ devices.",
-            "Notification ranking runs on-device where possible; cloud calls are out of scope for the PoC.",
-            "System UI owns Notification shade surfaces; Settings owns persistent controls.",
-            "Low-priority categorization uses existing notification channels and user behavior signals.",
-        ],
-        "clarification_questions": [
-            "Which regions, device tiers, and Android/OTA versions are in launch scope?",
-            "Should summary ranking be fully on-device or can it call a server model?",
-            "What notification categories must never be summarized?",
-            "Which telemetry events are acceptable under privacy policy?",
-            "What is the fallback if ranking data is unavailable?",
-        ],
-        "open_questions": [
-            "Legal/privacy review is needed for notification content processing.",
-            "Performance budget needs confirmation from System UI and platform teams.",
-        ],
-        "status": "clarified",
-        "errors": [],
+        **state,
+        **rendered,
+        "product_idea": workspace.source_brief,
+        "canonical_state": workspace.model_dump(),
+        "gate_results": workspace.gate_results,
+        "agent_run_history": workspace.agent_run_history,
     }
 
 
-def generate_prd(state: ProductState) -> ProductState:
-    idea = state["product_idea"]
-    assumptions = "\n".join(f"- {item}" for item in state["assumptions"])
-    questions = "\n".join(f"- {item}" for item in state["clarification_questions"])
-    prd = f"""# PRD vDraft: Smart Notification Summary
-
-## Product Overview
-{idea}
-
-Smart Notification Summary reduces notification overload by grouping low-priority notifications into a compact card while keeping urgent notifications immediately visible.
-
-## Background and Problem Definition
-Phone users receive high notification volume from commerce, social, content, and utility apps. Current Notification shade experiences force users to scan individual low-priority cards, increasing cognitive load and making urgent alerts harder to notice.
-
-## Goals
-- Reduce Notification shade clutter without hiding critical notifications.
-- Give users explicit opt-in control from Settings and an inline summary card action.
-- Provide clear empty, loading, error, and success states.
-- Generate reviewable outputs for PM, UX, engineering, and QA.
-
-## Non-goals
-- Rewriting Android notification ranking infrastructure.
-- Sending notification content to third-party services.
-- Building a real Figma or Jira integration in this PoC.
-
-## Target Users and Scenarios
-- Power users with high daily notification volume.
-- Users who want promotional and low-priority updates batched.
-- QA and support teams validating notification behavior across device states.
-
-## System Entry Points
-- **Notification shade:** Summary card appears above low-priority notification groups.
-- **Settings:** `Settings > Notifications > Smart Notification Summary` contains opt-in toggle and category controls.
-- **Lock screen:** Out of scope for v1.0 unless privacy review approves redacted summary text.
-
-## User Journey
-1. User enables Smart Notification Summary in Settings.
-2. System shows a loading state while recent notifications are categorized.
-3. Notification shade displays a summary card with grouped low-priority notifications.
-4. User expands the card, opens source notifications, or marks the summary as useful.
-5. User can disable the feature or exclude app categories in Settings.
-
-## Functional Requirements
-| Capability | Requirement | Prototype experience |
-| --- | --- | --- |
-| Summary card | Show a summary card in Notification shade when low-priority notifications exist. | Notification shade summary card |
-| Settings control | Provide Settings opt-in toggle and category controls. | Settings opt-in |
-| Empty state | Show empty state when no summarizable notifications exist. | Notification shade empty state |
-| Error state | Show error/offline state when ranking data cannot be prepared. | Notification shade error state |
-| Success feedback | Show success feedback after user confirms or tunes the summary. | Feedback saved state |
-
-## Privacy and Permission Handling
-- Use notification listener/system privileges already available to System UI.
-- Do not expose notification content outside system-owned components in v1.0.
-- Redact sensitive app categories and private lock-screen content.
-- Provide an explicit opt-in toggle with a plain-language explanation.
-
-## Key States and Edge Cases
-- Loading: ranking pipeline is preparing summary content.
-- Empty: no low-priority notifications or all apps excluded.
-- Error/offline: classifier unavailable, stale data, or storage read failure.
-- No permission/disabled: user has not opted in or disabled notification access.
-- Success: summary action saved, app exclusion changed, or card dismissed.
-
-## Performance, Power, and Memory
-- Summary generation should complete within 500 ms for cached notification data.
-- Avoid wakeups when Notification shade is closed.
-- Keep memory bounded by summarizing metadata and short redacted snippets only.
-- Degrade gracefully on low-memory devices.
-
-## Region, Device, Android, and OTA Constraints
-- Initial scope: Android 15+ OTA, mid/high-tier devices with System UI summary surface enabled.
-- Region policy may disable summary text for markets with stricter notification privacy requirements.
-- OEM skin variants must validate Notification shade layout compatibility.
-
-## Owner Boundaries
-- System UI: Notification shade card, state rendering, inline actions.
-- Settings: opt-in toggle and category controls.
-- Platform notification team: ranking and notification metadata contract.
-- Data/logging: privacy-safe telemetry events.
-- QA: regression matrix across device states, app categories, and OTA paths.
-
-## Acceptance Criteria
-- Users can enable or disable the feature from Settings.
-- Summary card appears only when eligible low-priority notifications exist.
-- Empty, loading, error, disabled, and success states render with stable copy.
-- Critical notifications remain outside the summary.
-- QA can trace each delivery story to a PRD requirement, prototype screen/state, and acceptance criterion.
-
-## Assumptions
-{assumptions}
-
-## Questions to Confirm
-{questions}
-"""
-    return {"prd_markdown": prd, "status": "prd_generated"}
+def run_agent(state: ProductState, agent_id: str, fallback) -> ProductState:
+    workspace = workspace_from_state(state)
+    executor = AgentExecutor()
+    updated, _ = executor.run(agent_id, workspace, fallback, {"context_pack": state.get("context_pack", "")})
+    next_state = state_from_workspace(state, updated)
+    next_state["runtime_mode"] = executor.runtime_mode
+    return next_state
 
 
-def generate_ux_flow(state: ProductState) -> ProductState:
-    flow = """# UX Flow: Smart Notification Summary
+def coordinator_node(state: ProductState) -> ProductState:
+    def fallback(workspace: ProductWorkspaceState) -> dict[str, Any]:
+        return {
+            "metadata": {
+                **workspace.metadata,
+                "name": "Smart Notification Summary",
+                "workflow_phase": "full_generation",
+                "affected_artefacts": ["prd", "user_flow", "prototype", "qa_criteria", "traceability"],
+            },
+            "source_brief": product_summary_from_input(state.get("user_input", "")),
+        }
 
-## Main Flow
-1. User opens Settings and enables Smart Notification Summary.
-2. User pulls down Notification shade.
-3. System shows a short loading state while summary data is prepared.
-4. Summary card appears with grouped low-priority updates.
-5. User expands the card, opens an item, marks it useful, or jumps to Settings.
-
-## Alternate Flows
-- Empty: no eligible notifications, so the card explains that the summary will appear later.
-- Error: ranking is unavailable, so System UI preserves the normal notification list.
-- Disabled: Settings toggle is off, so no summary card is shown.
-- Permission and privacy: revoked access or sensitive content prevents summarization and falls back to the normal notification list.
-- Device/system state: low memory, OTA upgrade, and offline conditions preserve user settings and fail closed.
-
-## Prototype Screens and States
-- Notification shade summary card
-- Settings opt-in
-- Empty state
-- Loading state
-- Error state
-- Success feedback
-- Permission/privacy fallback
-- Device/system state fallback
-"""
-    mermaid = """```mermaid
-flowchart TD
-    A[Settings opt-in entry] --> B{User enables Smart Notification Summary?}
-    B -- No --> C[Disabled state: normal Notification shade]
-    B -- Yes --> D{Permission and privacy checks pass?}
-    D -- No --> E[Privacy fallback: redact or do not summarize]
-    D -- Yes --> F[Open Notification shade]
-    F --> G[Loading state: prepare on-device summary]
-    G --> H{Device/system state healthy?}
-    H -- Low memory, OTA migration, or classifier unavailable --> I[Error state: preserve normal notification list]
-    H -- Healthy --> J{Eligible low-priority notifications?}
-    J -- No --> K[Empty state]
-    J -- Yes --> L[Summary card in Notification shade]
-    L --> M[Expand or open source notification]
-    L --> N[Mark summary useful]
-    L --> O[Manage categories in Settings]
-    N --> P[Success feedback]
-    O --> B
-```"""
-    return {"ux_flow_markdown": flow, "mermaid_flowchart": mermaid, "feature_map": FEATURE_MAP, "status": "ux_generated"}
+    next_state = run_agent({**state, "context_pack": load_context_pack()}, "coordinator", fallback)
+    next_state["status"] = "coordinated"
+    return next_state
 
 
-def generate_prototype(state: ProductState) -> ProductState:
-    html = """<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Smart Notification Summary Prototype</title>
-  <script src="https://cdn.tailwindcss.com"></script>
-  <style>
-    body { background: #f4f6f8; color: #17202a; }
-    .phone { width: min(390px, 96vw); min-height: 720px; border: 10px solid #111827; border-radius: 34px; background: #eef2f7; overflow: hidden; box-shadow: 0 18px 55px rgba(17,24,39,.22); }
-    .focus-ring { outline: 3px solid #0f766e; outline-offset: 4px; }
-    button { transition: transform .12s ease, background .12s ease; }
-    button:active { transform: scale(.98); }
-  </style>
-</head>
-<body>
-  <main class="min-h-screen flex items-center justify-center p-4">
-    <section class="phone">
-      <div class="bg-slate-950 text-white px-5 pt-4 pb-3">
-        <div class="flex justify-between text-xs opacity-80"><span>9:41</span><span>5G 82%</span></div>
-        <div class="mt-5 flex gap-2">
-          <button onclick="showView('shade')" class="px-3 py-2 rounded bg-white/15 text-sm">Shade</button>
-          <button onclick="showView('settings')" class="px-3 py-2 rounded bg-white/15 text-sm">Settings</button>
-          <button onclick="cycleState()" class="ml-auto px-3 py-2 rounded bg-teal-500 text-sm">Cycle state</button>
-        </div>
-      </div>
+def input_checker_node(state: ProductState) -> ProductState:
+    def fallback(workspace: ProductWorkspaceState) -> dict[str, Any]:
+        return {
+            "assumptions": [
+                "Feature ships as an opt-in system experience for Android 15+ devices.",
+                "Notification ranking runs on-device where possible; cloud calls are out of scope for the PoC.",
+                "System UI owns Notification shade surfaces; Settings owns persistent controls.",
+                "Low-priority categorization uses existing notification channels and user behavior signals.",
+            ],
+            "open_questions": [
+                "Which regions, device tiers, and Android/OTA versions are in launch scope?",
+                "Should summary ranking be fully on-device or can it call a server model?",
+                "What notification categories must never be summarized?",
+                "Which telemetry events are acceptable under privacy policy?",
+                "What is the fallback if ranking data is unavailable?",
+            ],
+            "user_segments": [
+                "Power users with high daily notification volume.",
+                "Users who want promotional and low-priority updates batched.",
+                "QA and support teams validating notification behavior across device states.",
+            ],
+        }
 
-      <div id="shade" class="p-4 space-y-3">
-        <div class="text-sm font-semibold text-slate-600">Notification shade</div>
-        <div id="loading" data-feature="loading_state" class="rounded-md bg-white p-4 shadow-sm">
-          <div class="h-3 w-32 bg-slate-200 rounded animate-pulse"></div>
-          <div class="mt-3 h-3 w-56 bg-slate-200 rounded animate-pulse"></div>
-        </div>
-        <div id="summary" data-feature="notification_summary_card" class="hidden rounded-md bg-white p-4 shadow-sm">
-          <div class="flex items-start justify-between gap-3">
-            <div>
-              <div class="text-base font-semibold">Smart summary</div>
-              <p class="text-sm text-slate-600 mt-1">7 low-priority updates grouped from Shopping, News, and Social.</p>
-            </div>
-            <span class="text-xs bg-teal-100 text-teal-800 px-2 py-1 rounded">Opt-in</span>
-          </div>
-          <div id="expanded" class="hidden mt-3 text-sm text-slate-700 space-y-2">
-            <p>Shopping: 3 delivery and promo updates</p>
-            <p>News: 2 digest items</p>
-            <p>Social: 2 non-urgent reactions</p>
-          </div>
-          <div class="mt-4 flex gap-2">
-            <button onclick="toggleExpanded()" class="px-3 py-2 rounded bg-slate-900 text-white text-sm">Expand</button>
-            <button onclick="showSuccess()" class="px-3 py-2 rounded bg-teal-600 text-white text-sm">Useful</button>
-            <button onclick="showView('settings')" class="px-3 py-2 rounded bg-slate-100 text-sm">Manage</button>
-          </div>
-        </div>
-        <div id="empty" data-feature="empty_state" class="hidden rounded-md bg-white p-4 shadow-sm">
-          <div class="font-semibold">No summary right now</div>
-          <p class="text-sm text-slate-600 mt-1">Critical notifications stay visible. Low-priority updates will appear here when available.</p>
-        </div>
-        <div id="error" data-feature="error_state" class="hidden rounded-md bg-red-50 p-4 border border-red-200">
-          <div class="font-semibold text-red-900">Summary unavailable</div>
-          <p class="text-sm text-red-700 mt-1">Your regular notifications are still shown. Try again later or review Settings.</p>
-        </div>
-        <div id="success" data-feature="success_feedback" class="hidden rounded-md bg-emerald-50 p-4 border border-emerald-200">
-          <div class="font-semibold text-emerald-900">Preference saved</div>
-          <p class="text-sm text-emerald-700 mt-1">The system will tune future summaries from this feedback.</p>
-        </div>
-        <div class="rounded-md bg-white p-4 shadow-sm">
-          <div class="font-medium">Calendar</div>
-          <p class="text-sm text-slate-600">Design review starts in 15 minutes.</p>
-        </div>
-      </div>
+    next_state = run_agent(state, "input_checker", fallback)
+    next_state["status"] = "input_checked"
+    return next_state
 
-      <div id="settings" class="hidden p-4 space-y-3">
-        <div class="text-sm font-semibold text-slate-600">Settings > Notifications</div>
-        <div data-feature="settings_toggle" class="rounded-md bg-white p-4 shadow-sm">
-          <div class="flex items-center justify-between">
-            <div>
-              <div class="font-semibold">Smart Notification Summary</div>
-              <p class="text-sm text-slate-600 mt-1">Group low-priority notifications into one summary card.</p>
-            </div>
-            <label class="inline-flex items-center cursor-pointer">
-              <input id="toggle" type="checkbox" checked class="sr-only peer" onchange="syncToggle()" />
-              <span class="w-11 h-6 bg-slate-300 rounded-full peer-checked:bg-teal-600 relative after:content-[''] after:absolute after:h-5 after:w-5 after:bg-white after:rounded-full after:left-0.5 after:top-0.5 peer-checked:after:translate-x-5 after:transition"></span>
-            </label>
-          </div>
-        </div>
-        <div class="rounded-md bg-white p-4 shadow-sm space-y-2">
-          <div class="font-medium">Included categories</div>
-          <label class="flex justify-between text-sm"><span>Shopping updates</span><input type="checkbox" checked></label>
-          <label class="flex justify-between text-sm"><span>News digests</span><input type="checkbox" checked></label>
-          <label class="flex justify-between text-sm"><span>Social reactions</span><input type="checkbox" checked></label>
-        </div>
-      </div>
-    </section>
-  </main>
-  <script>
-    const states = ['loading', 'summary', 'empty', 'error'];
-    let stateIndex = 1;
-    function hideStates(){ states.concat(['success']).forEach(id => document.getElementById(id).classList.add('hidden')); }
-    function renderState(id){ hideStates(); document.getElementById(id).classList.remove('hidden'); location.hash = id; }
-    function cycleState(){ stateIndex = (stateIndex + 1) % states.length; renderState(states[stateIndex]); }
-    function showSuccess(){ hideStates(); document.getElementById('success').classList.remove('hidden'); location.hash = 'success_feedback'; }
-    function toggleExpanded(){ document.getElementById('expanded').classList.toggle('hidden'); }
-    function showView(id){ document.getElementById('shade').classList.toggle('hidden', id !== 'shade'); document.getElementById('settings').classList.toggle('hidden', id !== 'settings'); }
-    function syncToggle(){ renderState(document.getElementById('toggle').checked ? 'summary' : 'empty'); }
-    function applyFocus(){
-      const focus = new URLSearchParams(location.search).get('focus') || location.hash.replace('#','');
-      if (!focus) { renderState('summary'); return; }
-      const target = document.querySelector(`[data-feature="${focus}"]`) || document.getElementById(focus);
-      if (focus === 'settings_toggle') showView('settings'); else showView('shade');
-      if (focus === 'empty_state') renderState('empty');
-      else if (focus === 'error_state') renderState('error');
-      else if (focus === 'success_feedback') showSuccess();
-      else if (focus !== 'settings_toggle') renderState('summary');
-      if (target) target.classList.add('focus-ring');
+
+def input_gate_node(state: ProductState) -> ProductState:
+    workspace = workspace_from_state(state)
+    failed = []
+    if len(workspace.source_brief.strip()) < 24:
+        failed.append("Source brief is too short to establish product intent.")
+    if not workspace.assumptions:
+        failed.append("Assumptions are missing.")
+    status = "needs_human" if failed else "pass"
+    result = gate_result("input_readiness", status, failed, "Clarify product scope before generation.", "input_checker")
+    append_gate(workspace, result)
+    next_state = state_from_workspace(state, workspace)
+    next_state["status"] = "input_ready" if status == "pass" else "needs_human"
+    return next_state
+
+
+def prd_node(state: ProductState) -> ProductState:
+    def fallback(workspace: ProductWorkspaceState) -> dict[str, Any]:
+        return {
+            "goals": [
+                "Reduce Notification shade clutter without hiding critical notifications.",
+                "Give users explicit opt-in control from Settings and inline summary actions.",
+                "Provide clear empty, loading, error, privacy fallback, and success states.",
+                "Generate reviewable outputs for PM, UX, engineering, and QA.",
+            ],
+            "non_goals": [
+                "Rewriting Android notification ranking infrastructure.",
+                "Sending notification content to third-party services.",
+                "Building real Figma, Jira, or proxy integrations in this foundation.",
+            ],
+            "surfaces": ["Notification shade", "Settings > Notifications", "System privacy controls"],
+            "entry_points": [
+                "Notification shade summary card appears above eligible low-priority groups.",
+                "Settings contains opt-in toggle and category controls.",
+                "Lock screen summary text remains out of scope unless privacy review approves redaction behavior.",
+            ],
+            "device_states": [
+                "Loading while ranking prepares cached notification metadata.",
+                "Empty when no eligible notifications exist or all categories are excluded.",
+                "Error/offline when classifier data cannot be prepared.",
+                "Disabled/no permission when the user has not opted in.",
+                "OTA migration, low-memory, region policy, and model eligibility states preserve safe fallback behavior.",
+            ],
+            "functional_requirements": [
+                {"id": "FR-01", "title": "Summary card", "description": "Show a summary card in Notification shade when low-priority notifications exist.", "prototype_states": ["notification_summary_card"]},
+                {"id": "FR-02", "title": "Settings control", "description": "Provide Settings opt-in toggle and category controls.", "prototype_states": ["settings_toggle"]},
+                {"id": "FR-03", "title": "Empty state", "description": "Show empty state when no summarizable notifications exist.", "prototype_states": ["empty_state"]},
+                {"id": "FR-04", "title": "Error state", "description": "Show error/offline state when ranking data cannot be prepared.", "prototype_states": ["error_state"]},
+                {"id": "FR-05", "title": "Success feedback", "description": "Show success feedback after useful/tuning actions.", "prototype_states": ["success_feedback"]},
+            ],
+            "risks": [
+                {"id": "R-privacy", "description": "Notification content must remain inside system-owned components and sensitive categories must be redacted or excluded."},
+                {"id": "R-power", "description": "Avoid background wakeups when Notification shade is closed and keep cached generation under 500 ms."},
+                {"id": "R-ota", "description": "OTA migration must preserve opt-in and category selections."},
+                {"id": "R-region-model", "description": "Region policy and eligible device/model scope must be confirmed before rollout."},
+            ],
+            "owner_boundaries": [
+                {"owner": "System UI", "boundary": "Notification shade card, state rendering, and inline actions."},
+                {"owner": "Settings", "boundary": "Opt-in toggle and category controls."},
+                {"owner": "Platform notification team", "boundary": "Ranking and notification metadata contract."},
+                {"owner": "Data/logging", "boundary": "Privacy-safe telemetry events."},
+                {"owner": "QA", "boundary": "Regression matrix across device states, app categories, and OTA paths."},
+            ],
+        }
+
+    next_state = run_agent(state, "prd", fallback)
+    next_state["status"] = "prd_generated"
+    return next_state
+
+
+def prd_gate_node(state: ProductState) -> ProductState:
+    workspace = workspace_from_state(state)
+    attempt = latest_attempt(workspace, "prd_quality")
+    failed = []
+    if len(workspace.functional_requirements) < 5:
+        failed.append("Functional requirements do not cover the expected core states.")
+    if not workspace.goals or not workspace.non_goals:
+        failed.append("Goals and non-goals must both be explicit.")
+    if not workspace.owner_boundaries:
+        failed.append("Owner boundaries are missing.")
+    status = "pass" if not failed else "needs_human" if attempt >= 2 else "fail"
+    append_gate(workspace, gate_result("prd_quality", status, failed, "Revise PRD structure and owner boundaries.", "prd", attempt))
+    next_state = state_from_workspace(state, workspace)
+    next_state["status"] = "prd_gate_passed" if status == "pass" else status
+    return next_state
+
+
+def ux_node(state: ProductState) -> ProductState:
+    def fallback(workspace: ProductWorkspaceState) -> dict[str, Any]:
+        ux_states = [
+            {"id": "settings_toggle", "name": "Settings opt-in", "description": "User enables or disables Smart Notification Summary."},
+            {"id": "loading_state", "name": "Loading", "description": "System prepares cached on-device summary data."},
+            {"id": "notification_summary_card", "name": "Notification shade summary card", "description": "Grouped low-priority updates appear while urgent alerts stay separate."},
+            {"id": "empty_state", "name": "Empty state", "description": "No eligible notifications are available."},
+            {"id": "error_state", "name": "Error state", "description": "Classifier or storage unavailable; normal notification list remains visible."},
+            {"id": "privacy_fallback", "name": "Privacy fallback", "description": "Sensitive or lock-screen content is redacted or not summarized."},
+            {"id": "success_feedback", "name": "Success feedback", "description": "User feedback has been saved."},
+        ]
+        flows = [
+            {"from": "A", "to": "B", "label": "Settings opt-in entry"},
+            {"from": "B", "to": "C", "label": "Permission and privacy checks"},
+            {"from": "C", "to": "D", "label": "Open Notification shade"},
+            {"from": "D", "to": "E", "label": "Loading state"},
+            {"from": "E", "to": "F", "label": "Summary, empty, error, or privacy fallback"},
+            {"from": "F", "to": "G", "label": "Feedback or manage categories"},
+        ]
+        return {"ux_states": ux_states, "flows": flows}
+
+    next_state = run_agent(state, "ux_flow", fallback)
+    next_state["status"] = "ux_generated"
+    return next_state
+
+
+def prototype_node(state: ProductState) -> ProductState:
+    def fallback(workspace: ProductWorkspaceState) -> dict[str, Any]:
+        screens = [
+            {"state_id": "notification_summary_card", "label": "Shade", "title": "Smart summary", "body": "7 low-priority updates grouped from Shopping, News, and Social. Critical notifications remain outside the summary."},
+            {"state_id": "settings_toggle", "label": "Settings", "title": "Smart Notification Summary", "body": "Opt-in toggle and category controls for low-priority notification summaries."},
+            {"state_id": "empty_state", "label": "Empty", "title": "No summary right now", "body": "Low-priority updates will appear when eligible notifications exist."},
+            {"state_id": "error_state", "label": "Error", "title": "Summary unavailable", "body": "Regular notifications are still shown. Try again later or review Settings."},
+            {"state_id": "privacy_fallback", "label": "Privacy", "title": "Private content protected", "body": "Sensitive content is redacted or excluded before any summary appears."},
+            {"state_id": "success_feedback", "label": "Saved", "title": "Preference saved", "body": "The system will tune future summaries from this feedback."},
+        ]
+        return {"prototype_screens": screens}
+
+    next_state = run_agent(state, "prototype", fallback)
+    next_state["status"] = "prototype_generated"
+    return next_state
+
+
+def ux_prototype_gate_node(state: ProductState) -> ProductState:
+    workspace = workspace_from_state(state)
+    attempt = latest_attempt(workspace, "ux_prototype_alignment")
+    ux_ids = {item["id"] for item in workspace.ux_states}
+    prototype_ids = {item["state_id"] for item in workspace.prototype_screens}
+    failed = sorted(ux_ids - prototype_ids - {"loading_state"})
+    status = "pass" if not failed else "needs_human" if attempt >= 2 else "fail"
+    append_gate(workspace, gate_result("ux_prototype_alignment", status, failed, "Align UX states to prototype screens.", "prototype", attempt))
+    next_state = state_from_workspace(state, workspace)
+    next_state["status"] = "ux_prototype_gate_passed" if status == "pass" else status
+    return next_state
+
+
+def qa_node(state: ProductState) -> ProductState:
+    def fallback(workspace: ProductWorkspaceState) -> dict[str, Any]:
+        criteria = [
+            {"id": "QA-01", "requirement_id": "FR-01", "criterion": "Summary card appears only with eligible low-priority notifications; critical alerts remain separate."},
+            {"id": "QA-02", "requirement_id": "FR-02", "criterion": "Settings toggle persists across restart and disabled state prevents summary display."},
+            {"id": "QA-03", "requirement_id": "FR-03", "criterion": "No eligible notifications shows empty state and normal notifications are unaffected."},
+            {"id": "QA-04", "requirement_id": "FR-04", "criterion": "Ranking unavailable shows error state and preserves the standard notification list."},
+            {"id": "QA-05", "requirement_id": "FR-05", "criterion": "Useful action shows success feedback without removing critical notifications."},
+            {"id": "QA-06", "requirement_id": "R-privacy", "criterion": "Sensitive categories, lock-screen content, and permission revocation fail closed."},
+            {"id": "QA-07", "requirement_id": "R-power", "criterion": "Cached generation meets latency budget and does not create background wakeups."},
+            {"id": "QA-08", "requirement_id": "R-ota", "criterion": "OTA migration preserves opt-in state and category selections."},
+            {"id": "QA-09", "requirement_id": "R-region-model", "criterion": "Region and eligible model constraints are enforced before rollout."},
+        ]
+        return {"qa_criteria": criteria}
+
+    next_state = run_agent(state, "qa", fallback)
+    next_state["status"] = "qa_generated"
+    return next_state
+
+
+def qa_gate_node(state: ProductState) -> ProductState:
+    workspace = workspace_from_state(state)
+    attempt = latest_attempt(workspace, "qa_coverage")
+    covered = {item["requirement_id"] for item in workspace.qa_criteria}
+    required = {item["id"] for item in workspace.functional_requirements}
+    failed = sorted(required - covered)
+    for risk in ["R-privacy", "R-power", "R-ota", "R-region-model"]:
+        if risk not in covered:
+            failed.append(f"{risk} coverage missing")
+    status = "pass" if not failed else "needs_human" if attempt >= 2 else "fail"
+    append_gate(workspace, gate_result("qa_coverage", status, failed, "Revise QA coverage for requirements and risk categories.", "qa", attempt))
+    next_state = state_from_workspace(state, workspace)
+    next_state["status"] = "qa_gate_passed" if status == "pass" else status
+    return next_state
+
+
+def traceability_node(state: ProductState) -> ProductState:
+    def fallback(workspace: ProductWorkspaceState) -> dict[str, Any]:
+        qa_by_req = {item["requirement_id"]: item for item in workspace.qa_criteria}
+        links = []
+        for req in workspace.functional_requirements:
+            qa = qa_by_req.get(req["id"], {"id": "QA-TBD", "criterion": "Coverage to be confirmed."})
+            links.append(
+                {
+                    "outcome": workspace.goals[0] if workspace.goals else "Product outcome to confirm.",
+                    "requirement_id": req["id"],
+                    "requirement": req["title"],
+                    "prototype_state": (req.get("prototype_states") or ["state_tbd"])[0],
+                    "qa_id": qa["id"],
+                    "qa": qa["criterion"],
+                }
+            )
+        return {"trace_links": links}
+
+    next_state = run_agent(state, "traceability", fallback)
+    next_state["status"] = "traceability_generated"
+    return next_state
+
+
+def final_gate_node(state: ProductState) -> ProductState:
+    workspace = workspace_from_state(state)
+    attempt = latest_attempt(workspace, "final_alignment")
+    req_ids = {item["id"] for item in workspace.functional_requirements}
+    traced = {item["requirement_id"] for item in workspace.trace_links}
+    failed = sorted(req_ids - traced)
+    risky = any(result.get("status") == "needs_human" for result in workspace.gate_results)
+    status = "needs_human" if risky else "pass" if not failed else "needs_human" if attempt >= 2 else "fail"
+    append_gate(workspace, gate_result("final_alignment", status, failed, "Resolve traceability before publishing.", "traceability", attempt))
+    next_state = state_from_workspace(state, workspace)
+    next_state["status"] = "final_gate_passed" if status == "pass" else status
+    return next_state
+
+
+def human_approval_node(state: ProductState) -> ProductState:
+    workspace = workspace_from_state(state)
+    request = {
+        "status": "pending",
+        "rationale": "A gate or sensitive product change needs approval before publishing a new version.",
+        "gate_results": [result for result in workspace.gate_results if result.get("status") == "needs_human"],
     }
-    applyFocus();
-  </script>
-</body>
-</html>"""
-    return {"prototype_html": html, "status": "prototype_generated"}
+    workspace.human_approvals.append(request)
+    next_state = state_from_workspace(state, workspace)
+    next_state["pending_approval_request"] = request
+    next_state["status"] = "needs_human"
+    return next_state
 
 
-def generate_traceability(state: ProductState) -> ProductState:
-    traceability = """# Traceability Matrix
-
-| Product outcome | PRD requirement | User flow / prototype state | QA criterion |
-| --- | --- | --- | --- |
-| Reduce notification overload without hiding urgent alerts. | FR-01 Summary card: Show a summary card in Notification shade when low-priority notifications exist. | Main flow steps 2-5; `notification_summary_card` prototype focus. | Card appears only with eligible notifications; critical notifications remain separate. |
-| Give users explicit control before system summarization starts. | FR-02 Settings control: Provide Settings opt-in toggle and category controls. | Main flow step 1; `settings_toggle` prototype focus. | Toggle persists across restart; disabled state prevents summary display. |
-| Make no-content moments understandable and non-disruptive. | FR-03 Empty state: Show empty state when no summarizable notifications exist. | Alternate flow: Empty; `empty_state` prototype focus. | No eligible notifications shows empty state and normal notifications are unaffected. |
-| Preserve the normal notification list when ranking cannot run. | FR-04 Error state: Show error/offline state when ranking data cannot be prepared. | Alternate flow: Error; `error_state` prototype focus. | Ranking unavailable shows error state and standard notification list remains visible. |
-| Capture lightweight user feedback for future tuning. | FR-05 Success feedback: Show success feedback after useful/tuning actions. | Main flow step 5; `success_feedback` prototype focus. | Useful action shows success feedback without removing critical notifications. |
-"""
-    return {"traceability_markdown": traceability, "status": "traceability_generated"}
+def publish_node(state: ProductState) -> ProductState:
+    return {**state, "status": "completed", "pending_approval_request": None}
 
 
-def generate_qa(state: ProductState) -> ProductState:
-    qa = """# QA Acceptance Criteria
-
-## Normal Path
-- Enable Smart Notification Summary in Settings and verify the Notification shade summary card appears when eligible low-priority notifications exist.
-- Expand the summary card and confirm grouped categories remain traceable to source notifications.
-- Tap `Useful` and verify success feedback appears without removing critical notifications.
-
-## Boundary Scenarios
-- No eligible notifications: empty state appears and normal notifications are unaffected.
-- All categories excluded: summary card does not appear.
-- Device upgraded by OTA: previous opt-in state and category selections are preserved.
-
-## Failure States
-- Ranking unavailable: error state appears and standard notification list remains visible.
-- Storage read failure: feature fails closed and logs a privacy-safe diagnostic event.
-- Offline: on-device cached behavior continues; no network dependency blocks Notification shade.
-
-## Permission and Privacy
-- Disabled toggle prevents summary generation.
-- Sensitive notification categories are redacted or excluded.
-- Lock screen does not show summary text unless privacy setting allows it.
-
-## Regression Risks
-- Notification shade jank or delayed expansion.
-- Critical notifications incorrectly grouped into summary.
-- Excess battery usage from background ranking.
-- Settings toggle desynchronized from System UI state.
-"""
-    return {"qa_criteria": qa, "status": "qa_generated"}
+def route_gate(state: ProductState, pass_target: str) -> str:
+    status = state.get("status")
+    if status == "needs_human":
+        return "human_approval"
+    if status == "fail":
+        latest = (state.get("gate_results") or [])[-1]
+        return latest.get("revision_target") or pass_target
+    return pass_target
 
 
-def complete_workspace(state: ProductState) -> ProductState:
-    return {"status": "completed"}
+def route_input_gate(state: ProductState) -> str:
+    return route_gate(state, "prd")
+
+
+def route_prd_gate(state: ProductState) -> str:
+    return route_gate(state, "ux")
+
+
+def route_ux_prototype_gate(state: ProductState) -> str:
+    return route_gate(state, "qa")
+
+
+def route_qa_gate(state: ProductState) -> str:
+    return route_gate(state, "traceability")
+
+
+def route_final_gate(state: ProductState) -> str:
+    return route_gate(state, "publish")
 
 
 def build_graph():
     graph = StateGraph(ProductState)
-    graph.add_node("clarify", clarify_requirements)
-    graph.add_node("prd", generate_prd)
-    graph.add_node("ux", generate_ux_flow)
-    graph.add_node("prototype", generate_prototype)
-    graph.add_node("traceability", generate_traceability)
-    graph.add_node("qa", generate_qa)
-    graph.add_node("complete", complete_workspace)
-    graph.add_edge(START, "clarify")
-    graph.add_edge("clarify", "prd")
-    graph.add_edge("prd", "ux")
+    graph.add_node("coordinator", coordinator_node)
+    graph.add_node("input_checker", input_checker_node)
+    graph.add_node("input_gate", input_gate_node)
+    graph.add_node("prd", prd_node)
+    graph.add_node("prd_gate", prd_gate_node)
+    graph.add_node("ux", ux_node)
+    graph.add_node("prototype", prototype_node)
+    graph.add_node("ux_prototype_gate", ux_prototype_gate_node)
+    graph.add_node("qa", qa_node)
+    graph.add_node("qa_gate", qa_gate_node)
+    graph.add_node("traceability", traceability_node)
+    graph.add_node("final_alignment_gate", final_gate_node)
+    graph.add_node("human_approval", human_approval_node)
+    graph.add_node("publish", publish_node)
+    graph.add_edge(START, "coordinator")
+    graph.add_edge("coordinator", "input_checker")
+    graph.add_edge("input_checker", "input_gate")
+    graph.add_conditional_edges("input_gate", route_input_gate, {"prd": "prd", "human_approval": "human_approval"})
+    graph.add_edge("prd", "prd_gate")
+    graph.add_conditional_edges("prd_gate", route_prd_gate, {"ux": "ux", "prd": "prd", "human_approval": "human_approval"})
     graph.add_edge("ux", "prototype")
-    graph.add_edge("prototype", "traceability")
-    graph.add_edge("traceability", "qa")
-    graph.add_edge("qa", "complete")
-    graph.add_edge("complete", END)
+    graph.add_edge("prototype", "ux_prototype_gate")
+    graph.add_conditional_edges("ux_prototype_gate", route_ux_prototype_gate, {"qa": "qa", "ux": "ux", "prototype": "prototype", "human_approval": "human_approval"})
+    graph.add_edge("qa", "qa_gate")
+    graph.add_conditional_edges("qa_gate", route_qa_gate, {"traceability": "traceability", "qa": "qa", "human_approval": "human_approval"})
+    graph.add_edge("traceability", "final_alignment_gate")
+    graph.add_conditional_edges("final_alignment_gate", route_final_gate, {"publish": "publish", "traceability": "traceability", "human_approval": "human_approval"})
+    graph.add_edge("publish", END)
+    graph.add_edge("human_approval", END)
     return graph.compile()
 
 
 def run_product_workflow(project_id: str, user_input: str) -> ProductState:
-    _ = ModelClient()
     graph = build_graph()
     initial: ProductState = {"project_id": project_id, "user_input": user_input, "status": "started", "errors": []}
     return graph.invoke(initial)
