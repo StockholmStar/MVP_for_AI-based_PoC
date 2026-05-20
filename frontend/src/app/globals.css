@@ -30,6 +30,12 @@ textarea {
   margin: 1.2rem 0 .45rem;
 }
 
+.markdown h3 {
+  font-size: .95rem;
+  font-weight: 700;
+  margin: 1rem 0 .4rem;
+}
+
 .markdown p,
 .markdown li,
 .markdown td,
@@ -57,4 +63,43 @@ textarea {
   padding: .75rem;
   border-radius: .4rem;
   overflow: auto;
+}
+
+.trace-table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 760px;
+}
+
+.trace-table th,
+.trace-table td {
+  border-bottom: 1px solid #e2e8f0;
+  padding: .65rem .75rem;
+  text-align: left;
+  vertical-align: top;
+  font-size: .82rem;
+  line-height: 1.45;
+}
+
+.trace-table th {
+  background: #f8fafc;
+  color: #475569;
+  font-weight: 700;
+}
+
+.trace-table td {
+  color: #334155;
+}
+
+.mermaid-frame {
+  overflow: auto;
+  border: 1px solid #d8dee8;
+  border-radius: .5rem;
+  background: #ffffff;
+  padding: 1rem;
+}
+
+.mermaid-frame svg {
+  min-width: 760px;
+  max-width: none;
 }

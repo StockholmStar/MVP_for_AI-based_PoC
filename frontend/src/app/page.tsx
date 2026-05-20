@@ -1,18 +1,80 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
-import { Bot, Boxes, CheckCircle2, FileText, GitBranch, Loader2, Play, Plus, TestTube2, TicketCheck } from "lucide-react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Bot,
+  Boxes,
+  CheckCircle2,
+  ChevronDown,
+  ClipboardCheck,
+  FileText,
+  GitBranch,
+  Layers3,
+  Loader2,
+  MonitorSmartphone,
+  PackageCheck,
+  Play,
+  Plus,
+  ShieldCheck,
+  TestTube2
+} from "lucide-react";
 import { Artefact, Project, ProjectDetail, api, apiDisplayBaseUrl } from "@/lib/api";
 
-const artefactTabs = [
+const workspaceTabs = [
+  { key: "overview", label: "Product Overview", icon: Layers3 },
   { key: "prd", label: "PRD", icon: FileText },
-  { key: "ux_flow", label: "UX Flow", icon: GitBranch },
-  { key: "consistency_review", label: "Consistency", icon: CheckCircle2 },
-  { key: "qa_criteria", label: "QA Criteria", icon: TestTube2 },
-  { key: "jira_stories_md", label: "Jira Stories", icon: TicketCheck }
+  { key: "user_flow", label: "User Flow", icon: GitBranch },
+  { key: "prototype", label: "Prototype", icon: MonitorSmartphone },
+  { key: "qa", label: "QA Criteria", icon: TestTube2 },
+  { key: "delivery", label: "Delivery Pack", icon: PackageCheck }
 ];
 
 const demoPrompt = "为智能通知摘要功能生成 PRD 和原型，覆盖 Notification shade、Settings opt-in、empty/error/success 状态，并生成 QA 和 Jira stories。";
+
+const traceRows = [
+  {
+    outcome: "Notification shade summary card",
+    requirement: "Show a summary card when eligible low-priority notifications exist.",
+    screen: "Notification shade",
+    qa: "Card appears only with eligible notifications; critical alerts remain separate.",
+    delivery: "Render summary card in Notification shade"
+  },
+  {
+    outcome: "Settings opt-in and category control",
+    requirement: "Provide an explicit Settings opt-in and category controls.",
+    screen: "Settings > Notifications",
+    qa: "Toggle persists and disabled state prevents summary display.",
+    delivery: "Add Settings opt-in and category controls"
+  },
+  {
+    outcome: "Empty/loading/success/error states",
+    requirement: "Render stable states for unavailable, preparing, complete, and no-content moments.",
+    screen: "Shade state surfaces",
+    qa: "Normal, empty, error, offline, OTA, and privacy cases are covered.",
+    delivery: "Deliver Smart Notification Summary v1.0"
+  }
+];
+
+const alignmentGaps = [
+  {
+    title: "Lock screen privacy is not prototyped",
+    source: "PRD privacy and permission handling",
+    affected: "Prototype: lock screen state",
+    action: "Keep out of v1.0 or add a redacted lock-screen state after privacy review."
+  },
+  {
+    title: "Region, device, and OTA constraints need visual or QA coverage",
+    source: "PRD launch constraints",
+    affected: "QA matrix and Delivery Pack",
+    action: "Add launch-scope checks to QA and note owner boundary in the delivery story."
+  },
+  {
+    title: "Useful feedback action needs telemetry definition",
+    source: "Prototype success feedback",
+    affected: "PRD analytics details and acceptance criteria",
+    action: "Confirm privacy-safe events before implementation planning."
+  }
+];
 
 function parseVersion(version: string) {
   return version
@@ -33,13 +95,16 @@ function compareVersions(a: string, b: string) {
   return a.localeCompare(b);
 }
 
+function escapeHtml(markdown: string) {
+  return markdown.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
 function renderMarkdownLite(markdown: string) {
-  const html = markdown
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
+  const withoutMermaid = markdown.replace(/```mermaid[\s\S]*?```/g, "");
+  const html = escapeHtml(withoutMermaid)
     .replace(/^# (.*)$/gm, "<h1>$1</h1>")
     .replace(/^## (.*)$/gm, "<h2>$1</h2>")
+    .replace(/^### (.*)$/gm, "<h3>$1</h3>")
     .replace(/^\|(.+)\|$/gm, "<pre>|$1|</pre>")
     .replace(/^- (.*)$/gm, "<li>$1</li>")
     .replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")
@@ -48,10 +113,65 @@ function renderMarkdownLite(markdown: string) {
   return { __html: html };
 }
 
+function mermaidSourceFrom(content: string) {
+  const fenced = content.match(/```mermaid\s*([\s\S]*?)```/);
+  return (fenced?.[1] || content).trim();
+}
+
+function sectionFrom(markdown: string, heading: string) {
+  const escaped = heading.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = markdown.match(new RegExp(`## ${escaped}\\n([\\s\\S]*?)(?=\\n## |$)`));
+  return match?.[1]?.trim() || "";
+}
+
+function MermaidDiagram({ source }: { source: string }) {
+  const [svg, setSvg] = useState("");
+  const [error, setError] = useState("");
+  const renderId = useRef(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    const id = `smart-summary-flow-${Date.now()}-${renderId.current++}`;
+
+    async function render() {
+      if (!source.trim()) return;
+      try {
+        const mermaid = (await import("mermaid")).default;
+        mermaid.initialize({ startOnLoad: false, securityLevel: "strict", theme: "base" });
+        const result = await mermaid.render(id, source);
+        if (!cancelled) {
+          setSvg(result.svg);
+          setError("");
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setSvg("");
+          setError((err as Error).message);
+        }
+      }
+    }
+
+    render();
+    return () => {
+      cancelled = true;
+    };
+  }, [source]);
+
+  if (error) {
+    return <div className="rounded border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">Flowchart render failed: {error}</div>;
+  }
+
+  if (!svg) {
+    return <div className="rounded border border-dashed border-slate-300 p-6 text-sm text-slate-600">Rendering flowchart...</div>;
+  }
+
+  return <div className="mermaid-frame" dangerouslySetInnerHTML={{ __html: svg }} />;
+}
+
 export default function Home() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [detail, setDetail] = useState<ProjectDetail | null>(null);
-  const [selectedTab, setSelectedTab] = useState("prd");
+  const [selectedTab, setSelectedTab] = useState("overview");
   const [input, setInput] = useState(demoPrompt);
   const [busy, setBusy] = useState(false);
   const [log, setLog] = useState<string[]>(["Ready. Open the demo project or run the workflow."]);
@@ -96,31 +216,42 @@ export default function Home() {
     return detail.artefacts.filter((item) => item.version === selectedVersion);
   }, [detail, selectedVersion]);
 
-  const activeArtefact: Artefact | undefined = useMemo(
-    () => selectedVersionArtefacts.find((item) => item.kind === selectedTab),
-    [selectedVersionArtefacts, selectedTab]
-  );
-
-  const activePrototype = selectedVersionArtefacts.find((item) => item.kind === "prototype");
-  const activeArtefactContent = activeArtefact ? artefactContentById[activeArtefact.id] : undefined;
-  const activeArtefactLoaded = activeArtefact ? activeArtefact.id in artefactContentById : false;
-  const prototypeSrc = detail && selectedVersion ? api.prototypeUrl(detail.project.id, selectedVersion, focus) : "";
+  const artefactsByKind = useMemo(() => {
+    return selectedVersionArtefacts.reduce<Record<string, Artefact>>((items, artefact) => {
+      items[artefact.kind] = artefact;
+      return items;
+    }, {});
+  }, [selectedVersionArtefacts]);
 
   useEffect(() => {
-    if (!detail || !activeArtefact || activeArtefactLoaded) return;
-    let ignore = false;
-    api
-      .getArtefactContent(detail.project.id, activeArtefact.id)
-      .then((content) => {
-        if (!ignore) {
-          setArtefactContentById((items) => ({ ...items, [activeArtefact.id]: content }));
-        }
-      })
-      .catch((error) => setLog((items) => [`Artefact load failed: ${error.message}`, ...items]));
-    return () => {
-      ignore = true;
-    };
-  }, [activeArtefact, activeArtefactLoaded, detail]);
+    if (!detail) return;
+    selectedVersionArtefacts.forEach((artefact) => {
+      if (artefact.id in artefactContentById) return;
+      api
+        .getArtefactContent(detail.project.id, artefact.id)
+        .then((content) => {
+          setArtefactContentById((items) => ({ ...items, [artefact.id]: content }));
+        })
+        .catch((error) => setLog((items) => [`Artefact load failed: ${error.message}`, ...items]));
+    });
+  }, [artefactContentById, detail, selectedVersionArtefacts]);
+
+  function content(kind: string) {
+    const artefact = artefactsByKind[kind];
+    return artefact ? artefactContentById[artefact.id] || "" : "";
+  }
+
+  const prd = content("prd");
+  const userFlow = content("ux_flow");
+  const flowchart = mermaidSourceFrom(content("flowchart"));
+  const qaCriteria = content("qa_criteria");
+  const deliveryStories = content("jira_stories_md");
+  const alignmentReport = content("consistency_review");
+  const activePrototype = artefactsByKind.prototype;
+  const prototypeSrc = detail && selectedVersion ? api.prototypeUrl(detail.project.id, selectedVersion, focus) : "";
+  const overview = sectionFrom(prd, "Product Overview") || detail?.project.product_idea || "Run the workflow to generate a product overview.";
+  const alignmentGapCount = alignmentGaps.length;
+  const versionLabel = selectedVersion ? (selectedVersion === detail?.project.current_version ? `Latest (${selectedVersion})` : selectedVersion) : "No version";
 
   async function runAgent(event: FormEvent) {
     event.preventDefault();
@@ -132,13 +263,13 @@ export default function Home() {
         await refresh(activeProject.id);
       }
 
-      setLog((items) => [`Running LangGraph workflow for ${activeProject.name}...`, ...items]);
+      setLog((items) => [`Running product workflow for ${activeProject.name}...`, ...items]);
       const result = await api.runWorkflow(activeProject.id, input.trim());
       const version = (result as { run: { version: string; message: string } }).run.version;
       setLog((items) => [`Completed ${version}: ${(result as { run: { message: string } }).run.message}`, ...items]);
       setSelectedVersion(version);
       await refresh(activeProject.id);
-      setSelectedTab("prd");
+      setSelectedTab("overview");
     } catch (error) {
       setLog((items) => [`Run failed: ${(error as Error).message}`, ...items]);
     } finally {
@@ -158,6 +289,13 @@ export default function Home() {
     setLog((items) => [`Created project ${project.name}`, ...items]);
   }
 
+  function MarkdownPanel({ markdown, empty }: { markdown: string; empty: string }) {
+    if (markdown) {
+      return <div className="markdown" dangerouslySetInnerHTML={renderMarkdownLite(markdown)} />;
+    }
+    return <div className="rounded border border-dashed border-slate-300 p-6 text-sm text-slate-600">{empty}</div>;
+  }
+
   return (
     <main className="flex h-screen min-h-[760px] bg-[#f5f7fa] text-ink">
       <aside className="w-72 shrink-0 border-r border-slate-200 bg-white p-4 flex flex-col gap-4">
@@ -165,7 +303,7 @@ export default function Home() {
           <div className="flex items-center gap-2 text-lg font-bold">
             <Boxes size={20} /> AI Product Workspace
           </div>
-          <p className="mt-1 text-xs text-slate-500">LangGraph multi-agent product artefact alignment PoC</p>
+          <p className="mt-1 text-xs text-slate-500">Product planning workspace for PM, UX, R&D, and QA alignment.</p>
         </div>
 
         <form onSubmit={createProject} className="space-y-2">
@@ -185,79 +323,216 @@ export default function Home() {
                   setSelectedVersion(project.current_version);
                   refresh(project.id);
                 }}
-                className={`w-full rounded px-3 py-2 text-left text-sm ${detail?.project.id === project.id ? "bg-teal-50 text-teal-900" : "hover:bg-slate-100"}`}
+                className={`w-full rounded px-3 py-2 text-left text-sm ${detail?.project.id === project.id ? "bg-teal-50 text-teal-950" : "hover:bg-slate-100"}`}
               >
                 <div className="font-medium">{project.name}</div>
-                <div className="text-xs text-slate-500">{project.current_version}</div>
+                <div className="mt-1 text-xs text-slate-500">Current plan: {project.current_version}</div>
               </button>
             ))}
           </div>
+        </div>
 
-          <div className="mb-2 mt-5 text-xs font-semibold uppercase text-slate-500">Artefacts</div>
-          <div className="space-y-1">
-            {artefactTabs.map(({ key, label, icon: Icon }) => (
-              <button
-                key={key}
-                onClick={() => setSelectedTab(key)}
-                className={`flex w-full items-center gap-2 rounded px-3 py-2 text-sm ${selectedTab === key ? "bg-slate-900 text-white" : "hover:bg-slate-100"}`}
-              >
-                <Icon size={15} /> {label}
-              </button>
-            ))}
+        <div className="rounded border border-teal-100 bg-teal-50 p-3">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 text-sm font-semibold text-teal-950">
+              <ShieldCheck size={16} /> Alignment
+            </div>
+            <span className="rounded bg-white px-2 py-1 text-xs font-medium text-teal-800">{alignmentGapCount} gaps found</span>
           </div>
-
-          <div className="mb-2 mt-5 text-xs font-semibold uppercase text-slate-500">Versions</div>
-          <div className="flex flex-wrap gap-2">
-            {versions.length ? versions.map((version) => (
-              <button
-                key={version}
-                type="button"
-                onClick={() => setSelectedVersion(version)}
-                className={`rounded px-2 py-1 text-xs font-medium ${selectedVersion === version ? "bg-teal-700 text-white" : "bg-slate-100 hover:bg-slate-200"}`}
-              >
-                {version}
-              </button>
-            )) : <span className="text-xs text-slate-500">No runs yet</span>}
-          </div>
+          <p className="mt-2 text-xs leading-5 text-teal-900">Requirements, prototype states, QA checks, and delivery stories stay traceable across the selected version.</p>
         </div>
       </aside>
 
       <section className="flex min-w-0 flex-1 flex-col">
-        <header className="flex h-16 items-center justify-between border-b border-slate-200 bg-white px-5">
-          <div>
-            <div className="font-semibold">{detail?.project.name || "Loading project"}</div>
-            <div className="text-xs text-slate-500">API: {apiLabel} · Human approval gates: PRD review, prototype review, Jira push pending</div>
+        <header className="border-b border-slate-200 bg-white px-5 py-3">
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <div className="font-semibold">{detail?.project.name || "Loading project"}</div>
+              <div className="text-xs text-slate-500">API: {apiLabel} · Review gates: PRD approval, prototype sign-off, delivery handoff</div>
+            </div>
+            <div className="flex items-center gap-2">
+              <label className="relative">
+                <span className="sr-only">Version</span>
+                <select value={selectedVersion} onChange={(event) => setSelectedVersion(event.target.value)} className="appearance-none rounded border border-slate-300 bg-white py-2 pl-3 pr-8 text-sm">
+                  {versions.length ? (
+                    versions.map((version, index) => (
+                      <option key={version} value={version}>
+                        {index === 0 ? `Latest (${version})` : version}
+                      </option>
+                    ))
+                  ) : (
+                    <option value="">No version</option>
+                  )}
+                </select>
+                <ChevronDown size={15} className="pointer-events-none absolute right-2 top-2.5 text-slate-500" />
+              </label>
+              <select value={focus} onChange={(event) => setFocus(event.target.value)} className="rounded border border-slate-300 px-2 py-2 text-sm">
+                <option value="notification_summary_card">Notification shade</option>
+                <option value="settings_toggle">Settings opt-in</option>
+                <option value="empty_state">Empty state</option>
+                <option value="error_state">Error state</option>
+                <option value="success_feedback">Success feedback</option>
+              </select>
+            </div>
           </div>
-          <div className="flex items-center gap-2">
-            <select value={focus} onChange={(event) => setFocus(event.target.value)} className="rounded border border-slate-300 px-2 py-2 text-sm">
-              <option value="notification_summary_card">Summary card</option>
-              <option value="settings_toggle">Settings toggle</option>
-              <option value="empty_state">Empty state</option>
-              <option value="error_state">Error state</option>
-              <option value="success_feedback">Success feedback</option>
-            </select>
-          </div>
+
+          <nav className="mt-3 flex gap-1 overflow-x-auto">
+            {workspaceTabs.map(({ key, label, icon: Icon }) => (
+              <button
+                key={key}
+                onClick={() => setSelectedTab(key)}
+                className={`flex shrink-0 items-center gap-2 rounded px-3 py-2 text-sm ${selectedTab === key ? "bg-slate-900 text-white" : "text-slate-700 hover:bg-slate-100"}`}
+              >
+                <Icon size={15} /> {label}
+              </button>
+            ))}
+          </nav>
         </header>
 
-        <div className="grid min-h-0 flex-1 grid-cols-2 gap-0">
+        <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_minmax(360px,44%)] gap-0">
           <article className="min-w-0 overflow-auto border-r border-slate-200 bg-white p-5">
-            <div className="mb-3 flex items-center justify-between">
-              <h1 className="text-base font-bold">{artefactTabs.find((item) => item.key === selectedTab)?.label}</h1>
-              <span className="rounded bg-slate-100 px-2 py-1 text-xs">{selectedVersion || activeArtefact?.version || "not generated"}</span>
+            <div className="mb-4 flex items-center justify-between">
+              <h1 className="text-base font-bold">{workspaceTabs.find((item) => item.key === selectedTab)?.label}</h1>
+              <span className="rounded bg-slate-100 px-2 py-1 text-xs">{versionLabel}</span>
             </div>
-            {activeArtefactLoaded ? (
-              <div className="markdown" dangerouslySetInnerHTML={renderMarkdownLite(activeArtefactContent || "")} />
-            ) : activeArtefact ? (
-              <div className="rounded border border-dashed border-slate-300 p-6 text-sm text-slate-600">Loading artefact...</div>
-            ) : (
-              <div className="rounded border border-dashed border-slate-300 p-6 text-sm text-slate-600">This artefact was not generated for {selectedVersion || "the selected version"}.</div>
+
+            {selectedTab === "overview" && (
+              <div className="space-y-4">
+                <section>
+                  <h2 className="text-sm font-semibold text-slate-900">Product direction</h2>
+                  <p className="mt-2 text-sm leading-6 text-slate-700">{overview}</p>
+                </section>
+                <section className="rounded border border-slate-200">
+                  <div className="flex items-center justify-between border-b border-slate-200 px-3 py-2">
+                    <div className="flex items-center gap-2 text-sm font-semibold">
+                      <CheckCircle2 size={16} className="text-teal-700" /> Alignment status
+                    </div>
+                    <span className="rounded bg-amber-50 px-2 py-1 text-xs font-medium text-amber-800">{alignmentGapCount} gaps to resolve</span>
+                  </div>
+                  <div className="divide-y divide-slate-200">
+                    {alignmentGaps.map((gap) => (
+                      <div key={gap.title} className="p-3">
+                        <div className="text-sm font-semibold text-slate-900">{gap.title}</div>
+                        <div className="mt-1 text-xs leading-5 text-slate-600">Source: {gap.source} · Affects: {gap.affected}</div>
+                        <div className="mt-2 text-sm text-slate-700">{gap.action}</div>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+                <section>
+                  <h2 className="text-sm font-semibold text-slate-900">Traceability snapshot</h2>
+                  <div className="mt-2 overflow-auto rounded border border-slate-200">
+                    <table className="trace-table">
+                      <thead>
+                        <tr>
+                          <th>Product outcome</th>
+                          <th>Requirement</th>
+                          <th>Prototype screen</th>
+                          <th>QA check</th>
+                          <th>Delivery story</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {traceRows.map((row) => (
+                          <tr key={row.outcome}>
+                            <td>{row.outcome}</td>
+                            <td>{row.requirement}</td>
+                            <td>{row.screen}</td>
+                            <td>{row.qa}</td>
+                            <td>{row.delivery}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </section>
+              </div>
+            )}
+
+            {selectedTab === "prd" && <MarkdownPanel markdown={prd} empty={`PRD was not generated for ${selectedVersion || "the selected version"}.`} />}
+
+            {selectedTab === "user_flow" && (
+              <div className="space-y-5">
+                {flowchart ? (
+                  <section>
+                    <div className="mb-2 text-sm font-semibold text-slate-900">Rendered smartphone system flow</div>
+                    <MermaidDiagram source={flowchart} />
+                  </section>
+                ) : (
+                  <div className="rounded border border-dashed border-slate-300 p-6 text-sm text-slate-600">Flowchart was not generated for this version.</div>
+                )}
+                <MarkdownPanel markdown={userFlow} empty="User flow was not generated for this version." />
+              </div>
+            )}
+
+            {selectedTab === "prototype" && (
+              <div className="space-y-4">
+                <p className="text-sm leading-6 text-slate-700">Use the preview panel to inspect Notification shade, Settings opt-in, empty, loading, success, error, permission, privacy, and system-state behavior. The selected focus is reflected in the prototype URL through the same-origin API proxy.</p>
+                <div className="overflow-auto rounded border border-slate-200">
+                  <table className="trace-table">
+                    <thead>
+                      <tr>
+                        <th>Screen/state</th>
+                        <th>Why it matters</th>
+                        <th>Trace target</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr><td>Notification shade</td><td>Primary user entry point for grouped low-priority updates.</td><td>PRD summary card requirement, QA normal path, delivery shade story</td></tr>
+                      <tr><td>Settings opt-in</td><td>Explicit control and privacy explanation before system summarization starts.</td><td>PRD permission handling, QA disabled state, delivery Settings story</td></tr>
+                      <tr><td>Empty/error/success</td><td>Shows graceful behavior when ranking, content, or feedback state changes.</td><td>PRD edge cases, QA failure states, delivery v1.0 epic</td></tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {selectedTab === "qa" && <MarkdownPanel markdown={qaCriteria} empty={`QA criteria were not generated for ${selectedVersion || "the selected version"}.`} />}
+
+            {selectedTab === "delivery" && (
+              <div className="space-y-5">
+                <section className="rounded border border-slate-200">
+                  <div className="flex items-center gap-2 border-b border-slate-200 px-3 py-2 text-sm font-semibold">
+                    <ClipboardCheck size={16} /> Delivery traceability
+                  </div>
+                  <div className="overflow-auto">
+                    <table className="trace-table">
+                      <thead>
+                        <tr>
+                          <th>Outcome</th>
+                          <th>Source requirement</th>
+                          <th>Affected prototype screen</th>
+                          <th>Suggested next action</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {alignmentGaps.map((gap) => (
+                          <tr key={gap.title}>
+                            <td>{gap.title}</td>
+                            <td>{gap.source}</td>
+                            <td>{gap.affected}</td>
+                            <td>{gap.action}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </section>
+                <MarkdownPanel markdown={deliveryStories} empty={`Delivery story drafts were not generated for ${selectedVersion || "the selected version"}.`} />
+                {alignmentReport && (
+                  <details className="rounded border border-slate-200 p-3 text-sm">
+                    <summary className="cursor-pointer font-semibold">Alignment review notes</summary>
+                    <div className="markdown mt-3" dangerouslySetInnerHTML={renderMarkdownLite(alignmentReport)} />
+                  </details>
+                )}
+              </div>
             )}
           </article>
 
           <section className="min-w-0 overflow-auto bg-[#e9eef5] p-5">
             <div className="mb-3 flex items-center justify-between">
               <h1 className="text-base font-bold">Prototype Preview</h1>
-              <span className="rounded bg-white px-2 py-1 text-xs">{selectedVersion || "not generated"}</span>
+              <span className="rounded bg-white px-2 py-1 text-xs">{versionLabel}</span>
             </div>
             {activePrototype ? (
               <iframe key={`${prototypeSrc}-${focus}`} src={prototypeSrc} className="h-[calc(100%-2rem)] min-h-[640px] w-full rounded border border-slate-300 bg-white" />
@@ -272,7 +547,9 @@ export default function Home() {
         <form onSubmit={runAgent} className="border-t border-slate-200 bg-white p-4">
           <div className="flex items-end gap-3">
             <div className="flex-1">
-              <label className="mb-1 flex items-center gap-2 text-sm font-semibold"><Bot size={16} /> Agent instruction</label>
+              <label className="mb-1 flex items-center gap-2 text-sm font-semibold">
+                <Bot size={16} /> Product brief
+              </label>
               <textarea value={input} onChange={(event) => setInput(event.target.value)} className="h-20 w-full resize-none rounded border border-slate-300 px-3 py-2 text-sm" />
             </div>
             <button type="submit" disabled={busy || !input.trim()} className="flex h-11 items-center gap-2 rounded bg-teal-700 px-4 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-60">

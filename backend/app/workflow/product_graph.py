@@ -145,13 +145,13 @@ Phone users receive high notification volume from commerce, social, content, and
 5. User can disable the feature or exclude app categories in Settings.
 
 ## Functional Requirements
-| ID | Requirement | Prototype focus |
+| Capability | Requirement | Prototype experience |
 | --- | --- | --- |
-| FR-01 | Show a summary card in Notification shade when low-priority notifications exist. | `{FEATURE_MAP["FR-01"]}` |
-| FR-02 | Provide Settings opt-in toggle and category controls. | `{FEATURE_MAP["FR-02"]}` |
-| FR-03 | Show empty state when no summarizable notifications exist. | `{FEATURE_MAP["FR-03"]}` |
-| FR-04 | Show error/offline state when ranking data cannot be prepared. | `{FEATURE_MAP["FR-04"]}` |
-| FR-05 | Show success feedback after user confirms or tunes the summary. | `{FEATURE_MAP["FR-05"]}` |
+| Summary card | Show a summary card in Notification shade when low-priority notifications exist. | Notification shade summary card |
+| Settings control | Provide Settings opt-in toggle and category controls. | Settings opt-in |
+| Empty state | Show empty state when no summarizable notifications exist. | Notification shade empty state |
+| Error state | Show error/offline state when ranking data cannot be prepared. | Notification shade error state |
+| Success feedback | Show success feedback after user confirms or tunes the summary. | Feedback saved state |
 
 ## Privacy and Permission Handling
 - Use notification listener/system privileges already available to System UI.
@@ -189,7 +189,7 @@ Phone users receive high notification volume from commerce, social, content, and
 - Summary card appears only when eligible low-priority notifications exist.
 - Empty, loading, error, disabled, and success states render with stable copy.
 - Critical notifications remain outside the summary.
-- QA can trace each Jira story to PRD requirement IDs and prototype feature IDs.
+- QA can trace each delivery story to a PRD requirement, prototype screen/state, and acceptance criterion.
 
 ## Assumptions
 {assumptions}
@@ -214,28 +214,37 @@ def generate_ux_flow(state: ProductState) -> ProductState:
 - Empty: no eligible notifications, so the card explains that the summary will appear later.
 - Error: ranking is unavailable, so System UI preserves the normal notification list.
 - Disabled: Settings toggle is off, so no summary card is shown.
+- Permission and privacy: revoked access or sensitive content prevents summarization and falls back to the normal notification list.
+- Device/system state: low memory, OTA upgrade, and offline conditions preserve user settings and fail closed.
 
-## Focus IDs
-- `notification_summary_card`
-- `settings_toggle`
-- `empty_state`
-- `error_state`
-- `success_feedback`
+## Prototype Screens and States
+- Notification shade summary card
+- Settings opt-in
+- Empty state
+- Loading state
+- Error state
+- Success feedback
+- Permission/privacy fallback
+- Device/system state fallback
 """
     mermaid = """```mermaid
 flowchart TD
-    A[Settings entry] --> B{Smart Summary enabled?}
-    B -- No --> C[Show disabled state]
-    B -- Yes --> D[Open Notification shade]
-    D --> E[Loading summary]
-    E --> F{Eligible notifications?}
-    F -- Yes --> G[Summary card]
-    F -- No --> H[Empty state]
-    G --> I[Expand or open item]
-    G --> J[Mark useful]
-    G --> K[Manage in Settings]
-    E --> L[Error state]
-    J --> M[Success feedback]
+    A[Settings opt-in entry] --> B{User enables Smart Notification Summary?}
+    B -- No --> C[Disabled state: normal Notification shade]
+    B -- Yes --> D{Permission and privacy checks pass?}
+    D -- No --> E[Privacy fallback: redact or do not summarize]
+    D -- Yes --> F[Open Notification shade]
+    F --> G[Loading state: prepare on-device summary]
+    G --> H{Device/system state healthy?}
+    H -- Low memory, OTA migration, or classifier unavailable --> I[Error state: preserve normal notification list]
+    H -- Healthy --> J{Eligible low-priority notifications?}
+    J -- No --> K[Empty state]
+    J -- Yes --> L[Summary card in Notification shade]
+    L --> M[Expand or open source notification]
+    L --> N[Mark summary useful]
+    L --> O[Manage categories in Settings]
+    N --> P[Success feedback]
+    O --> B
 ```"""
     return {"ux_flow_markdown": flow, "mermaid_flowchart": mermaid, "feature_map": FEATURE_MAP, "status": "ux_generated"}
 
@@ -433,6 +442,7 @@ def generate_jira(state: ProductState) -> ProductState:
             "acceptance_criteria": ["PRD FR-01 through FR-05 are implemented", "QA normal, empty, error, and privacy scenarios pass"],
             "dependencies": ["System UI surface", "Settings toggle", "Notification ranking contract"],
             "prd_sections": ["Functional Requirements", "Privacy and Permission Handling"],
+            "prototype_experience": "Notification shade summary card",
             "prototype_feature_id": "notification_summary_card",
         },
         {
@@ -442,7 +452,8 @@ def generate_jira(state: ProductState) -> ProductState:
             "description": "Create default, loading, empty, error, and success rendering states.",
             "acceptance_criteria": ["Card appears only with eligible notifications", "Critical notifications remain separate"],
             "dependencies": ["Notification metadata", "System UI layout"],
-            "prd_sections": ["FR-01", "Key States and Edge Cases"],
+            "prd_sections": ["Summary card requirement", "Key States and Edge Cases"],
+            "prototype_experience": "Notification shade summary card",
             "prototype_feature_id": "notification_summary_card",
         },
         {
@@ -452,7 +463,8 @@ def generate_jira(state: ProductState) -> ProductState:
             "description": "Expose toggle and category controls under Settings > Notifications.",
             "acceptance_criteria": ["Toggle persists across restart", "Disabled state prevents summary display"],
             "dependencies": ["Settings storage", "System UI state sync"],
-            "prd_sections": ["FR-02", "Owner Boundaries"],
+            "prd_sections": ["Settings control requirement", "Owner Boundaries"],
+            "prototype_experience": "Settings opt-in",
             "prototype_feature_id": "settings_toggle",
         },
     ]
@@ -463,7 +475,7 @@ def generate_jira(state: ProductState) -> ProductState:
         f"**Acceptance criteria:**\n" + "\n".join(f"- {criterion}" for criterion in item["acceptance_criteria"]) + "\n\n"
         f"**Dependencies:** {', '.join(item['dependencies'])}\n\n"
         f"**PRD trace:** {', '.join(item['prd_sections'])}\n\n"
-        f"**Prototype feature ID:** `{item['prototype_feature_id']}`"
+        f"**Prototype screen/state:** {item['prototype_experience']}"
         for item in stories
     )
     return {"jira_stories": stories, "jira_stories_markdown": md, "status": "completed"}
