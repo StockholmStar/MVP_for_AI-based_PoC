@@ -67,6 +67,22 @@ function compareVersions(a: string, b: string) {
   return a.localeCompare(b);
 }
 
+function shortText(value: string, maxLength = 96) {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (normalized.length <= maxLength) return normalized;
+  return `${normalized.slice(0, maxLength - 1).trimEnd()}...`;
+}
+
+function formatUpdatedAt(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+}
+
+function isGenericWorkspaceDescription(value: string) {
+  return value.trim().toLowerCase() === ["created", "from", "ai", "product", "workspace"].join(" ");
+}
+
 function escapeHtml(markdown: string) {
   return markdown.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
@@ -220,6 +236,17 @@ export default function Home() {
   const prototypeSrc = detail && selectedVersion ? api.prototypeUrl(detail.project.id, selectedVersion, focus) : "";
   const overview = sectionFrom(prd, "Product Overview") || detail?.project.product_idea || "Run the workflow to generate a product overview.";
   const versionLabel = selectedVersion ? (selectedVersion === detail?.project.current_version ? `Latest (${selectedVersion})` : selectedVersion) : "No version";
+  const projectSubtitle = useMemo(() => {
+    if (!detail) return "Loading project context";
+
+    const { project } = detail;
+    const description = isGenericWorkspaceDescription(project.description) ? "" : project.description;
+    const summary = shortText(description || project.product_idea);
+    const updatedAt = formatUpdatedAt(project.updated_at);
+    const metadata = [project.current_version ? `Current ${project.current_version}` : "", updatedAt ? `Updated ${updatedAt}` : ""].filter(Boolean);
+
+    return [summary, ...metadata].filter(Boolean).join(" · ");
+  }, [detail]);
 
   async function runAgent(event: FormEvent) {
     event.preventDefault();
@@ -249,7 +276,7 @@ export default function Home() {
     event.preventDefault();
     const project = await api.createProject({
       name: newName || "Untitled Product",
-      description: "Created from AI Product Workspace",
+      description: "Draft project created from the current product brief.",
       product_idea: input
     });
     setSelectedVersion(project.current_version);
@@ -307,7 +334,7 @@ export default function Home() {
           <div className="flex items-center justify-between gap-4">
             <div>
               <div className="font-semibold">{detail?.project.name || "Loading project"}</div>
-              <div className="text-xs text-slate-500">AI workspace for keeping PRD, user flow, prototype, and QA criteria in sync.</div>
+              {projectSubtitle ? <div className="text-xs text-slate-500">{projectSubtitle}</div> : null}
             </div>
             <div className="flex items-center gap-2">
               <label className="relative">
