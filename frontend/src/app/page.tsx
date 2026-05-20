@@ -15,7 +15,7 @@ import {
   Plus,
   TestTube2
 } from "lucide-react";
-import { Artefact, Project, ProjectDetail, api, apiDisplayBaseUrl } from "@/lib/api";
+import { Artefact, Project, ProjectDetail, api } from "@/lib/api";
 
 const workspaceTabs = [
   { key: "overview", label: "Product Overview", icon: Layers3 },
@@ -151,7 +151,6 @@ export default function Home() {
   const [newName, setNewName] = useState("Smart Notification Summary");
   const [selectedVersion, setSelectedVersion] = useState("");
   const [artefactContentById, setArtefactContentById] = useState<Record<string, string>>({});
-  const apiLabel = apiDisplayBaseUrl();
 
   async function refresh(projectId?: string) {
     const list = await api.listProjects();
@@ -308,7 +307,7 @@ export default function Home() {
           <div className="flex items-center justify-between gap-4">
             <div>
               <div className="font-semibold">{detail?.project.name || "Loading project"}</div>
-              <div className="text-xs text-slate-500">API: {apiLabel} · PRD, flow, prototype, and QA are kept aligned by the workflow</div>
+              <div className="text-xs text-slate-500">AI workspace for keeping PRD, user flow, prototype, and QA criteria in sync.</div>
             </div>
             <div className="flex items-center gap-2">
               <label className="relative">
@@ -417,7 +416,7 @@ export default function Home() {
 
             {selectedTab === "prototype" && (
               <div className="space-y-4">
-                <p className="text-sm leading-6 text-slate-700">Use the preview panel to inspect Notification shade, Settings opt-in, empty, loading, success, error, permission, privacy, and system-state behavior. The selected focus is reflected in the prototype URL through the same-origin API proxy.</p>
+                <p className="text-sm leading-6 text-slate-700">Use the preview panel to inspect Notification shade, Settings opt-in, empty, loading, success, error, permission, privacy, and system-state behavior. The selected focus keeps the prototype view tied to the planning scenario.</p>
                 <div className="overflow-auto rounded border border-slate-200">
                   <table className="trace-table">
                     <thead>
