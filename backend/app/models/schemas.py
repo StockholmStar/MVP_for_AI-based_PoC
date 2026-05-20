@@ -19,6 +19,12 @@ class RunCreate(BaseModel):
     user_input: str
 
 
+class AdjustmentCreate(BaseModel):
+    message: str
+    selected_version: str | None = None
+    selected_tab: str | None = None
+
+
 class Project(BaseModel):
     id: str
     name: str

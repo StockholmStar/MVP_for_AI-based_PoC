@@ -77,3 +77,63 @@ def test_project_detail_orders_versions_numerically(monkeypatch):
 
     assert versions[:3] == ["v1.13", "v1.2", "v1.1"]
     assert detail.json()["latest"]["prd"]["version"] == "v1.13"
+
+
+def test_targeted_adjustment_creates_new_version_and_updates_alignment():
+    created = client.post(
+        "/api/projects",
+        json={"name": "Adjustment Slice", "description": "", "product_idea": "Smart Notification Summary"},
+    )
+    project_id = created.json()["id"]
+    run = client.post(f"/api/projects/{project_id}/runs", json={"user_input": "Generate Smart Notification Summary"})
+    assert run.status_code == 200
+    first_version = run.json()["run"]["version"]
+
+    adjustment = client.post(
+        f"/api/projects/{project_id}/adjustments",
+        json={
+            "message": "Tweak the prototype empty state wording and align QA.",
+            "selected_version": first_version,
+            "selected_tab": "prototype",
+        },
+    )
+
+    assert adjustment.status_code == 200
+    body = adjustment.json()
+    assert body["status"] == "applied"
+    assert body["run"]["version"] != first_version
+    assert body["plan"]["focus"] == "empty_state"
+    assert "prototype" in body["plan"]["impacted"]
+
+    detail = client.get(f"/api/projects/{project_id}").json()
+    assert detail["project"]["current_version"] == body["run"]["version"]
+    assert "Applied Adjustment" in detail["latest"]["prd"]["content"]
+    assert "Adjustment coverage" in detail["latest"]["traceability"]["content"]
+
+
+def test_risky_adjustment_requires_approval_before_apply():
+    created = client.post(
+        "/api/projects",
+        json={"name": "Approval Slice", "description": "", "product_idea": "Smart Notification Summary"},
+    )
+    project_id = created.json()["id"]
+    client.post(f"/api/projects/{project_id}/runs", json={"user_input": "Generate Smart Notification Summary"})
+    before = client.get(f"/api/projects/{project_id}").json()["project"]["current_version"]
+
+    pending = client.post(
+        f"/api/projects/{project_id}/adjustments",
+        json={"message": "Rollout this to all regions and update OTA owner boundary notes.", "selected_tab": "prd"},
+    )
+
+    assert pending.status_code == 200
+    pending_body = pending.json()
+    assert pending_body["status"] == "pending_approval"
+    assert pending_body["approval"]["status"] == "pending"
+    assert client.get(f"/api/projects/{project_id}").json()["project"]["current_version"] == before
+
+    applied = client.post(f"/api/projects/{project_id}/approvals/{pending_body['approval']['id']}/apply")
+    assert applied.status_code == 200
+    applied_body = applied.json()
+    assert applied_body["status"] == "applied"
+    assert applied_body["run"]["version"] != before
+    assert applied_body["approval"]["status"] == "applied"

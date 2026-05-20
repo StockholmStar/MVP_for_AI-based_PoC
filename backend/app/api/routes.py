@@ -1,7 +1,8 @@
 from fastapi import APIRouter, HTTPException, Response
 
-from app.models.schemas import ProjectCreate, ProjectUpdate, RunCreate
+from app.models.schemas import AdjustmentCreate, ProjectCreate, ProjectUpdate, RunCreate
 from app.services import storage
+from app.workflow.adjustments import apply_adjustment_to_state
 from app.workflow.product_graph import DEMO_IDEA, run_product_workflow
 
 router = APIRouter(prefix="/api")
@@ -61,6 +62,74 @@ def run_workflow(project_id: str, payload: RunCreate):
     state = run_product_workflow(project_id, payload.user_input)
     run, artefacts, project = storage.save_run_and_artefacts(project_id, payload.user_input, dict(state))
     return {"run": run, "project": project, "artefacts": artefacts, "state": state}
+
+
+@router.post("/projects/{project_id}/adjustments")
+def create_adjustment(project_id: str, payload: AdjustmentCreate):
+    try:
+        project = storage.get_project(project_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Project not found") from exc
+
+    base_state = storage.latest_state(project_id, payload.selected_version or project["current_version"])
+    if not base_state:
+        state = run_product_workflow(project_id, project["product_idea"] or DEMO_IDEA)
+        base_state = dict(state)
+
+    proposed_state, plan = apply_adjustment_to_state(base_state, payload.message, payload.selected_tab)
+    proposed_state["product_idea"] = project["product_idea"]
+    if plan.risky:
+        approval = storage.create_pending_approval(project_id, payload.message, plan.rationale, proposed_state)
+        return {
+            "status": "pending_approval",
+            "message": "Message received. This change affects broad or sensitive system behavior and needs approval before a new version is created.",
+            "approval": approval,
+            "plan": proposed_state["adjustment_plan"],
+        }
+
+    run, artefacts, updated_project = storage.save_run_and_artefacts(project_id, payload.message, proposed_state)
+    return {
+        "status": "applied",
+        "message": f"Adjustment applied to {run['version']}. Updated {', '.join(plan.impacted)} and selected the new version.",
+        "run": run,
+        "project": updated_project,
+        "artefacts": artefacts,
+        "plan": proposed_state["adjustment_plan"],
+    }
+
+
+@router.post("/projects/{project_id}/approvals/{approval_id}/apply")
+def apply_approval(project_id: str, approval_id: str):
+    try:
+        approval = storage.get_pending_approval(project_id, approval_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Approval not found") from exc
+    if approval["status"] != "pending":
+        raise HTTPException(status_code=409, detail="Approval is no longer pending")
+
+    run, artefacts, project = storage.save_run_and_artefacts(project_id, approval["user_input"], approval["proposed_state"])
+    updated_approval = storage.update_pending_approval(project_id, approval_id, "applied")
+    return {
+        "status": "applied",
+        "message": f"Approved adjustment applied to {run['version']}.",
+        "approval": updated_approval,
+        "run": run,
+        "project": project,
+        "artefacts": artefacts,
+        "plan": approval["proposed_state"].get("adjustment_plan", {}),
+    }
+
+
+@router.post("/projects/{project_id}/approvals/{approval_id}/cancel")
+def cancel_approval(project_id: str, approval_id: str):
+    try:
+        approval = storage.get_pending_approval(project_id, approval_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Approval not found") from exc
+    if approval["status"] != "pending":
+        raise HTTPException(status_code=409, detail="Approval is no longer pending")
+    updated_approval = storage.update_pending_approval(project_id, approval_id, "cancelled")
+    return {"status": "cancelled", "message": "Pending adjustment cancelled. No artefacts were changed.", "approval": updated_approval}
 
 
 @router.get("/projects/{project_id}/artefacts")

@@ -1,3 +1,4 @@
+from app.workflow.adjustments import apply_adjustment_to_state, route_adjustment
 from app.workflow.product_graph import run_product_workflow
 
 
@@ -19,3 +20,23 @@ def test_product_overview_does_not_echo_agent_instruction():
     overview = state["prd_markdown"].split("## Background and Problem Definition", 1)[0]
     assert instruction not in overview
     assert "phone system feature" in overview
+
+
+def test_adjustment_routes_common_pm_intents():
+    plan = route_adjustment("Tweak the prototype empty state wording", "prototype")
+
+    assert plan.focus == "empty_state"
+    assert "prototype" in plan.impacted
+    assert "prd" in plan.impacted
+    assert not plan.risky
+
+
+def test_adjustment_updates_aligned_artefacts():
+    state = run_product_workflow("test-project", "Generate Smart Notification Summary")
+
+    updated, plan = apply_adjustment_to_state(state, "Update privacy wording in the PRD", "prd")
+
+    assert plan.focus == "privacy_fallback"
+    assert "Applied Adjustment" in updated["prd_markdown"]
+    assert "Privacy and owner boundary" in updated["prd_markdown"]
+    assert "Adjustment coverage" in updated["traceability_markdown"]

@@ -27,10 +27,6 @@ function apiBaseUrl() {
   return CONFIGURED_API_BASE_URL;
 }
 
-export function apiDisplayBaseUrl() {
-  return apiBaseUrl() || "same-origin /api proxy";
-}
-
 export type Project = {
   id: string;
   name: string;
@@ -57,6 +53,34 @@ export type ProjectDetail = {
   artefacts: Artefact[];
   runs: Array<{ id: string; version: string; status: string; message: string; created_at: string }>;
   latest: Record<string, Artefact>;
+};
+
+export type AdjustmentPlan = {
+  focus: string;
+  impacted: string[];
+  risky: boolean;
+  rationale: string;
+  summary: string;
+};
+
+export type PendingApproval = {
+  id: string;
+  project_id: string;
+  user_input: string;
+  rationale: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type AdjustmentResponse = {
+  status: "applied" | "pending_approval" | "cancelled";
+  message: string;
+  plan?: AdjustmentPlan;
+  approval?: PendingApproval;
+  run?: { id: string; version: string; message: string };
+  project?: Project;
+  artefacts?: Artefact[];
 };
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -92,6 +116,12 @@ export const api = {
     request<Project>(`/api/projects/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
   runWorkflow: (id: string, user_input: string) =>
     request(`/api/projects/${id}/runs`, { method: "POST", body: JSON.stringify({ user_input }) }),
+  adjustProject: (id: string, payload: { message: string; selected_version?: string; selected_tab?: string }) =>
+    request<AdjustmentResponse>(`/api/projects/${id}/adjustments`, { method: "POST", body: JSON.stringify(payload) }),
+  applyApproval: (projectId: string, approvalId: string) =>
+    request<AdjustmentResponse>(`/api/projects/${projectId}/approvals/${approvalId}/apply`, { method: "POST" }),
+  cancelApproval: (projectId: string, approvalId: string) =>
+    request<AdjustmentResponse>(`/api/projects/${projectId}/approvals/${approvalId}/cancel`, { method: "POST" }),
   getArtefactContent: (projectId: string, artefactId: string) => requestText(`/api/projects/${projectId}/artefacts/${artefactId}`),
   artefactUrl: (projectId: string, artefactId: string) => `${apiBaseUrl()}/api/projects/${projectId}/artefacts/${artefactId}`,
   prototypeUrl: (id: string, version: string, focus?: string) =>

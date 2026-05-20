@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
+  AlertTriangle,
   Bot,
   Boxes,
   CheckCircle2,
@@ -17,9 +18,10 @@ import {
   Play,
   Plus,
   Save,
+  Send,
   TestTube2
 } from "lucide-react";
-import { Artefact, Project, ProjectDetail, api } from "@/lib/api";
+import { AdjustmentResponse, Artefact, PendingApproval, Project, ProjectDetail, api } from "@/lib/api";
 
 const workspaceTabs = [
   { key: "overview", label: "Product Overview", icon: Layers3 },
@@ -30,6 +32,14 @@ const workspaceTabs = [
 ];
 
 const demoPrompt = "为智能通知摘要功能生成 PRD、用户流、可交互原型和 QA 标准，覆盖 Notification shade、Settings opt-in、empty/error/success 状态。";
+
+type ActivityItem = {
+  id: string;
+  status: "received" | "working" | "success" | "pending" | "failed" | "cancelled";
+  title: string;
+  body: string;
+  approval?: PendingApproval;
+};
 
 function parseVersion(version: string) {
   return version
@@ -154,7 +164,14 @@ export default function Home() {
   const [selectedTab, setSelectedTab] = useState("overview");
   const [input, setInput] = useState(demoPrompt);
   const [busy, setBusy] = useState(false);
-  const [log, setLog] = useState<string[]>(["Ready. Open the demo project or run the workflow."]);
+  const [activity, setActivity] = useState<ActivityItem[]>([
+    {
+      id: "ready",
+      status: "success",
+      title: "Workspace ready",
+      body: "Open the demo project, run the workflow, or ask for a targeted artefact adjustment."
+    }
+  ]);
   const [focus, setFocus] = useState("notification_summary_card");
   const [newName, setNewName] = useState("Smart Notification Summary");
   const [newDescription, setNewDescription] = useState("Phone system software workflow for notification overload, Settings control, privacy, and QA.");
@@ -162,6 +179,22 @@ export default function Home() {
   const [artefactContentById, setArtefactContentById] = useState<Record<string, string>>({});
   const [projectDraft, setProjectDraft] = useState({ name: "", description: "", product_idea: "" });
   const [savingProject, setSavingProject] = useState(false);
+
+  function pushActivity(item: Omit<ActivityItem, "id">) {
+    const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    setActivity((items) => [{ id, ...item }, ...items]);
+    return id;
+  }
+
+  function updateActivity(id: string, patch: Partial<ActivityItem>) {
+    setActivity((items) => items.map((item) => (item.id === id ? { ...item, ...patch } : item)));
+  }
+
+  function describeAdjustment(result: AdjustmentResponse) {
+    const impacted = result.plan?.impacted?.join(", ");
+    const focus = result.plan?.focus ? ` Focus: ${result.plan.focus}.` : "";
+    return impacted ? `${result.message} Updated: ${impacted}.${focus}` : result.message;
+  }
 
   async function refresh(projectId?: string) {
     const list = await api.listProjects();
@@ -176,7 +209,7 @@ export default function Home() {
     api
       .demoProject()
       .then((project) => refresh(project.id))
-      .catch((error) => setLog((items) => [`API error: ${error.message}`, ...items]));
+      .catch((error) => pushActivity({ status: "failed", title: "Project load failed", body: error.message }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -219,7 +252,7 @@ export default function Home() {
         .then((content) => {
           setArtefactContentById((items) => ({ ...items, [artefact.id]: content }));
         })
-        .catch((error) => setLog((items) => [`Artefact load failed: ${error.message}`, ...items]));
+        .catch((error) => pushActivity({ status: "failed", title: "Artefact load failed", body: error.message }));
     });
   }, [artefactContentById, detail, selectedVersionArtefacts]);
 
@@ -252,25 +285,106 @@ export default function Home() {
     return [summary, ...metadata].filter(Boolean).join(" · ");
   }, [detail]);
 
-  async function runAgent(event: FormEvent) {
-    event.preventDefault();
+  async function runAgent() {
     if (!input.trim()) return;
     setBusy(true);
+    const activityId = pushActivity({
+      status: "working",
+      title: "Workflow started",
+      body: "Generating Product Overview, PRD, User Flow, Prototype, QA Criteria, and traceability as a synchronized version."
+    });
     try {
       const activeProject = detail?.project || (await api.demoProject());
       if (!detail) {
         await refresh(activeProject.id);
       }
 
-      setLog((items) => [`Running product workflow for ${activeProject.name}...`, ...items]);
       const result = await api.runWorkflow(activeProject.id, input.trim());
       const version = (result as { run: { version: string; message: string } }).run.version;
-      setLog((items) => [`Completed ${version}: ${(result as { run: { message: string } }).run.message}`, ...items]);
+      updateActivity(activityId, {
+        status: "success",
+        title: `Workflow completed: ${version}`,
+        body: (result as { run: { message: string } }).run.message
+      });
       setSelectedVersion(version);
       await refresh(activeProject.id);
       setSelectedTab("overview");
     } catch (error) {
-      setLog((items) => [`Run failed: ${(error as Error).message}`, ...items]);
+      updateActivity(activityId, { status: "failed", title: "Workflow failed", body: (error as Error).message });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function submitAdjustment(event: FormEvent) {
+    event.preventDefault();
+    if (!input.trim()) return;
+    setBusy(true);
+    const receivedId = pushActivity({
+      status: "received",
+      title: "Message received",
+      body: "Routing request to the relevant artefacts and checking whether approval is needed."
+    });
+    try {
+      const activeProject = detail?.project || (await api.demoProject());
+      updateActivity(receivedId, {
+        status: "working",
+        title: "Adjustment in progress",
+        body: "Preparing a deterministic update across PRD, user flow, prototype, QA criteria, and traceability where applicable."
+      });
+      const result = await api.adjustProject(activeProject.id, {
+        message: input.trim(),
+        selected_version: selectedVersion || activeProject.current_version,
+        selected_tab: selectedTab
+      });
+
+      if (result.status === "pending_approval" && result.approval) {
+        updateActivity(receivedId, {
+          status: "pending",
+          title: "Approval needed",
+          body: describeAdjustment(result),
+          approval: result.approval
+        });
+        return;
+      }
+
+      const version = result.run?.version || result.project?.current_version || activeProject.current_version;
+      updateActivity(receivedId, {
+        status: "success",
+        title: `Adjustment applied: ${version}`,
+        body: describeAdjustment(result)
+      });
+      setSelectedVersion(version);
+      await refresh(activeProject.id);
+      if (result.plan?.focus) setFocus(result.plan.focus);
+    } catch (error) {
+      updateActivity(receivedId, { status: "failed", title: "Adjustment failed", body: (error as Error).message });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function resolveApproval(item: ActivityItem, action: "apply" | "cancel") {
+    if (!detail || !item.approval) return;
+    setBusy(true);
+    updateActivity(item.id, {
+      status: "working",
+      title: action === "apply" ? "Approval accepted" : "Approval rejected",
+      body: action === "apply" ? "Applying the approved change as a new version." : "Cancelling the pending change without modifying artefacts."
+    });
+    try {
+      const result = action === "apply" ? await api.applyApproval(detail.project.id, item.approval.id) : await api.cancelApproval(detail.project.id, item.approval.id);
+      if (action === "apply") {
+        const version = result.run?.version || result.project?.current_version || detail.project.current_version;
+        updateActivity(item.id, { status: "success", title: `Approved change applied: ${version}`, body: describeAdjustment(result), approval: undefined });
+        setSelectedVersion(version);
+        await refresh(detail.project.id);
+        if (result.plan?.focus) setFocus(result.plan.focus);
+      } else {
+        updateActivity(item.id, { status: "cancelled", title: "Pending change cancelled", body: result.message, approval: undefined });
+      }
+    } catch (error) {
+      updateActivity(item.id, { status: "failed", title: "Approval action failed", body: (error as Error).message });
     } finally {
       setBusy(false);
     }
@@ -285,7 +399,7 @@ export default function Home() {
     });
     setSelectedVersion(project.current_version);
     await refresh(project.id);
-    setLog((items) => [`Created project ${project.name}`, ...items]);
+    pushActivity({ status: "success", title: "Project created", body: project.name });
   }
 
   async function saveProject(event: FormEvent) {
@@ -296,9 +410,9 @@ export default function Home() {
       const project = await api.updateProject(detail.project.id, projectDraft);
       setInput(project.product_idea);
       await refresh(project.id);
-      setLog((items) => [`Saved project context for ${project.name}`, ...items]);
+      pushActivity({ status: "success", title: "Project context saved", body: project.name });
     } catch (error) {
-      setLog((items) => [`Save failed: ${(error as Error).message}`, ...items]);
+      pushActivity({ status: "failed", title: "Save failed", body: (error as Error).message });
     } finally {
       setSavingProject(false);
     }
@@ -308,7 +422,7 @@ export default function Home() {
     const value = selectedTab === "prototype" ? prototypeSrc : activeMarkdown;
     if (!value) return;
     await navigator.clipboard.writeText(value);
-    setLog((items) => [`Copied ${workspaceTabs.find((item) => item.key === selectedTab)?.label || "artefact"} to clipboard`, ...items]);
+    pushActivity({ status: "success", title: "Copied artefact", body: workspaceTabs.find((item) => item.key === selectedTab)?.label || "Selected artefact" });
   }
 
   function MarkdownPanel({ markdown, empty }: { markdown: string; empty: string }) {
@@ -316,6 +430,13 @@ export default function Home() {
       return <div className="markdown" dangerouslySetInnerHTML={renderMarkdownLite(markdown)} />;
     }
     return <div className="rounded border border-dashed border-slate-300 p-6 text-sm text-slate-600">{empty}</div>;
+  }
+
+  function ActivityIcon({ status }: { status: ActivityItem["status"] }) {
+    if (status === "working") return <Loader2 size={15} className="animate-spin text-teal-700" />;
+    if (status === "failed") return <AlertTriangle size={15} className="text-rose-700" />;
+    if (status === "pending") return <AlertTriangle size={15} className="text-amber-700" />;
+    return <CheckCircle2 size={15} className={status === "cancelled" ? "text-slate-500" : "text-teal-700"} />;
   }
 
   return (
@@ -552,23 +673,58 @@ export default function Home() {
           </section>
         </div>
 
-        <form onSubmit={runAgent} className="border-t border-slate-200 bg-white p-4">
-          <div className="flex items-end gap-3">
-            <div className="flex-1">
-              <label className="mb-1 flex items-center gap-2 text-sm font-semibold">
-                <Bot size={16} /> Product brief
-              </label>
-              <textarea value={input} onChange={(event) => setInput(event.target.value)} className="h-20 w-full resize-none rounded border border-slate-300 px-3 py-2 text-sm" />
+        <form onSubmit={submitAdjustment} className="grid min-h-[210px] grid-cols-[minmax(0,1fr)_minmax(360px,42%)] gap-4 border-t border-slate-200 bg-white p-4">
+          <section className="min-h-0 rounded border border-slate-200 bg-slate-50">
+            <div className="flex items-center justify-between border-b border-slate-200 px-3 py-2">
+              <div className="flex items-center gap-2 text-sm font-semibold">
+                <Bot size={16} /> AI response and activity
+              </div>
+              <span className="text-xs text-slate-500">Latest first</span>
             </div>
-            <button type="submit" disabled={busy || !input.trim()} className="flex h-11 items-center gap-2 rounded bg-teal-700 px-4 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-60">
-              {busy ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} />} Run workflow
-            </button>
-          </div>
-          <div className="mt-3 flex gap-2 overflow-x-auto text-xs text-slate-600">
-            {log.slice(0, 5).map((item, index) => (
-              <span key={`${item}-${index}`} className="shrink-0 rounded bg-slate-100 px-2 py-1">{item}</span>
-            ))}
-          </div>
+            <div className="max-h-44 space-y-2 overflow-auto p-3">
+              {activity.slice(0, 8).map((item) => (
+                <article key={item.id} className="rounded border border-slate-200 bg-white p-3">
+                  <div className="flex items-start gap-2">
+                    <ActivityIcon status={item.status} />
+                    <div className="min-w-0 flex-1">
+                      <div className="text-sm font-semibold text-slate-900">{item.title}</div>
+                      <p className="mt-1 text-xs leading-5 text-slate-600">{item.body}</p>
+                      {item.status === "pending" && item.approval ? (
+                        <div className="mt-3 flex gap-2">
+                          <button type="button" disabled={busy} onClick={() => resolveApproval(item, "apply")} className="rounded bg-teal-700 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-60">
+                            Approve and apply
+                          </button>
+                          <button type="button" disabled={busy} onClick={() => resolveApproval(item, "cancel")} className="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 disabled:opacity-60">
+                            Reject
+                          </button>
+                        </div>
+                      ) : null}
+                    </div>
+                  </div>
+                </article>
+              ))}
+            </div>
+          </section>
+
+          <section className="flex min-h-0 flex-col">
+            <label className="mb-1 flex items-center gap-2 text-sm font-semibold">
+              <Send size={16} /> Ask for an artefact adjustment
+            </label>
+            <textarea
+              value={input}
+              onChange={(event) => setInput(event.target.value)}
+              placeholder="Example: Update the empty state copy and align PRD, user flow, prototype, QA, and traceability."
+              className="min-h-28 flex-1 resize-none rounded border border-slate-300 px-3 py-2 text-sm"
+            />
+            <div className="mt-3 flex flex-wrap justify-end gap-2">
+              <button type="button" onClick={runAgent} disabled={busy || !input.trim()} className="flex h-10 items-center gap-2 rounded border border-slate-300 bg-white px-4 text-sm font-medium text-slate-800 disabled:cursor-not-allowed disabled:opacity-60">
+                <Play size={16} /> Run full workflow
+              </button>
+              <button type="submit" disabled={busy || !input.trim()} className="flex h-10 items-center gap-2 rounded bg-teal-700 px-4 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-60">
+                {busy ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />} Apply adjustment
+              </button>
+            </div>
+          </section>
         </form>
       </section>
     </main>

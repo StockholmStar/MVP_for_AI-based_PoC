@@ -64,6 +64,17 @@ def init_db() -> None:
                 created_at TEXT NOT NULL,
                 FOREIGN KEY(project_id) REFERENCES projects(id)
             );
+            CREATE TABLE IF NOT EXISTS pending_approvals (
+                id TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL,
+                user_input TEXT NOT NULL,
+                rationale TEXT NOT NULL,
+                proposed_state TEXT NOT NULL,
+                status TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(project_id) REFERENCES projects(id)
+            );
             """
         )
 
@@ -125,6 +136,25 @@ def list_artefacts(project_id: str) -> list[dict[str, Any]]:
     with connect() as conn:
         rows = [dict(row) for row in conn.execute("SELECT * FROM artefacts WHERE project_id = ?", (project_id,))]
     return sorted(rows, key=version_sort_key, reverse=True)
+
+
+def latest_state(project_id: str, version: str | None = None) -> dict[str, Any]:
+    state: dict[str, Any] = {}
+    artefacts = list_artefacts(project_id)
+    if version:
+        artefacts = [artefact for artefact in artefacts if artefact["version"] == version]
+    for artefact in artefacts:
+        if artefact["kind"] in state:
+            continue
+        spec = ARTEFACT_SPECS.get(artefact["kind"])
+        if not spec:
+            continue
+        state_key = spec[3]
+        try:
+            state[state_key] = (PROJECTS_DIR / project_id / artefact["path"]).read_text(encoding="utf-8")
+        except FileNotFoundError:
+            state[state_key] = ""
+    return state
 
 
 def parse_version(version: str) -> tuple[int, ...]:
@@ -189,6 +219,46 @@ def save_run_and_artefacts(project_id: str, user_input: str, state: dict[str, An
         }
         conn.execute("INSERT INTO runs VALUES (?, ?, ?, ?, ?, ?, ?)", tuple(run.values()))
     return run, artefacts, get_project(project_id)
+
+
+def create_pending_approval(project_id: str, user_input: str, rationale: str, proposed_state: dict[str, Any]) -> dict[str, Any]:
+    approval = {
+        "id": str(uuid.uuid4()),
+        "project_id": project_id,
+        "user_input": user_input,
+        "rationale": rationale,
+        "proposed_state": json.dumps(proposed_state, ensure_ascii=False),
+        "status": "pending",
+        "created_at": now_iso(),
+        "updated_at": now_iso(),
+    }
+    with connect() as conn:
+        conn.execute("INSERT INTO pending_approvals VALUES (?, ?, ?, ?, ?, ?, ?, ?)", tuple(approval.values()))
+    return {key: value for key, value in approval.items() if key != "proposed_state"}
+
+
+def get_pending_approval(project_id: str, approval_id: str) -> dict[str, Any]:
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM pending_approvals WHERE project_id = ? AND id = ?",
+            (project_id, approval_id),
+        ).fetchone()
+    if not row:
+        raise KeyError(approval_id)
+    approval = dict(row)
+    approval["proposed_state"] = json.loads(approval["proposed_state"])
+    return approval
+
+
+def update_pending_approval(project_id: str, approval_id: str, status: str) -> dict[str, Any]:
+    ts = now_iso()
+    with connect() as conn:
+        conn.execute(
+            "UPDATE pending_approvals SET status = ?, updated_at = ? WHERE project_id = ? AND id = ?",
+            (status, ts, project_id, approval_id),
+        )
+    approval = get_pending_approval(project_id, approval_id)
+    return {key: value for key, value in approval.items() if key != "proposed_state"}
 
 
 def read_artefact(project_id: str, artefact_id: str) -> tuple[str, str]:
